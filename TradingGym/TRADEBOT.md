@@ -4,7 +4,7 @@ Moduł `tradebot/` korzysta z TradingGym jako symulatora i dodaje cztery rzeczy:
 
 1. **MetaTrader 5.** Pobiera historyczne ticki albo świece do treningu, a w trakcie handlu odczytuje bieżące ticki.
 2. **Trening RL.** Agent uczy się algorytmem PPO albo DQN (biblioteka stable-baselines3). Trening wykorzystuje cały sprzęt: wszystkie rdzenie CPU, GPU, RAM i dysk SSD.
-3. **LLM przez Ollamę.** Model jest dobierany automatycznie do karty graficznej. Na RTX 5080 (16 GB) to `qwen2.5:14b`.
+3. **LLM przez Ollamę.** Model jest dobierany automatycznie do karty graficznej. Na RTX 5080 (16 GB) to `qwen3:14b`.
 4. **Handel.** Możliwe tryby: demo, live oraz dry-run (decyzje bez wysyłania zleceń). Wszystkie mają zabezpieczenia.
 
 > **Uwaga.** To narzędzie badawcze. Agent RL może dawać dobre wyniki na danych historycznych, a mimo to tracić pieniądze na żywo. Zawsze idź po kolei: backtest → dry-run → demo przez kilka tygodni → live z małym lotem i limitem straty.
@@ -39,12 +39,11 @@ Dobór modelu LLM do ilości VRAM (model mieści się w całości na GPU obok si
 
 | VRAM | Model |
 |---|---|
-| ≥ 40 GB | qwen2.5:72b |
-| ≥ 22 GB | qwen2.5:32b |
-| ≥ 14 GB | **qwen2.5:14b (RTX 5080)** |
-| ≥ 8 GB | qwen2.5:7b |
+| ≥ 22 GB | qwen3:32b |
+| ≥ 14 GB | **qwen3:14b (RTX 5080)** |
+| ≥ 8 GB | qwen3:8b |
 
-Model można zmienić parametrem `--llm-model`. Przy 64 GB RAM da się uruchomić `qwen2.5:32b` z częściowym przeniesieniem do RAM. Będzie jednak kilka razy wolniejszy, a przy handlu na żywo liczy się czas odpowiedzi.
+Model można zmienić parametrem `--llm-model`. Przy 64 GB RAM da się uruchomić `qwen3:32b` z częściowym przeniesieniem do RAM. Będzie jednak kilka razy wolniejszy, a przy handlu na żywo liczy się czas odpowiedzi.
 
 Sieć RL jest mała (MLP), więc główne obciążenie przy treningu przypada na CPU (symulacja), a GPU jest wykorzystane tylko częściowo. To normalne.
 
@@ -61,7 +60,7 @@ python -m tradebot hw
 
 Ollama: zainstaluj z https://ollama.com, a potem:
 ```powershell
-ollama pull qwen2.5:14b
+ollama pull qwen3:14b
 python -m tradebot llm-check
 ```
 

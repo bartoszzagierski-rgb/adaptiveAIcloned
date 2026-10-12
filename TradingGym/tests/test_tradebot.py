@@ -220,7 +220,7 @@ def test_hardware_profile_picks_model_for_rtx5080():
     from tradebot.hardware import HardwareProfile
     t7 = HardwareProfile(cpu_threads=20, ram_gb=64, gpu_name='NVIDIA GeForce RTX 5080', vram_gb=15.9, cuda=True,
                          free_disk_gb=1800)
-    assert t7.llm_model == 'qwen2.5:14b' and t7.n_envs == 18 and t7.device == 'cuda'
+    assert t7.llm_model == 'qwen3:14b' and t7.n_envs == 18 and t7.device == 'cuda'
     assert t7.dqn_buffer_size(obs_dim(3, 64)) > 1_000_000
 
 

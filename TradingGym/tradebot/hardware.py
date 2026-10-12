@@ -15,11 +15,10 @@ from dataclasses import asdict, dataclass
 
 # (min VRAM GB, model) - model musi sie zmiescic w calosci w VRAM obok sieci RL (~1-2 GB)
 LLM_BY_VRAM = [
-    (40, 'qwen2.5:72b'),
-    (22, 'qwen2.5:32b'),
-    (14, 'qwen2.5:14b'),
-    (8, 'qwen2.5:7b'),
-    (0, 'qwen2.5:3b'),
+    (22, 'qwen3:32b'),
+    (14, 'qwen3:14b'),
+    (8, 'qwen3:8b'),
+    (0, 'qwen3:4b'),
 ]
 
 
@@ -57,7 +56,7 @@ class HardwareProfile:
     @property
     def llm_model(self):
         if self.vram_gb == 0:  # brak GPU: model w RAM, wolniejszy -> maly
-            return 'qwen2.5:14b' if self.ram_gb >= 32 else 'qwen2.5:7b' if self.ram_gb >= 16 else 'qwen2.5:3b'
+            return 'qwen3:14b' if self.ram_gb >= 32 else 'qwen3:8b' if self.ram_gb >= 16 else 'qwen3:4b'
         return next(m for v, m in LLM_BY_VRAM if self.vram_gb >= v)
 
     def ollama_options(self):

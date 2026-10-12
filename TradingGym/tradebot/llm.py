@@ -5,7 +5,8 @@ LLM nie zastepuje uczenia RL - siec (PPO/DQN) uczy sie na danych. LLM pelni trzy
   * LLMSupervisor  - "drugi klucz" na zywo: zatwierdza albo wstrzymuje akcje agenta RL,
   * review_backtest- analizuje wyniki backtestu i proponuje zmiany parametrow treningu.
 
-Model dobierany automatycznie do VRAM (hardware.py); dla RTX 5080 16 GB: qwen2.5:14b (~9 GB).
+Model dobierany automatycznie do VRAM (hardware.py); dla RTX 5080 16 GB: qwen3:14b (~9 GB).
+Qwen3 ma tryb 'myslenia' - wylaczamy go (think=False): decyzje maja byc szybkie, a odpowiedz to krotki JSON.
 Instalacja: https://ollama.com -> `ollama pull <model>` (`python -m tradebot hw` pokaze ktory).
 """
 import json
@@ -17,7 +18,7 @@ from .features import market_summary
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MODEL = 'qwen2.5:14b'
+DEFAULT_MODEL = 'qwen3:14b'
 DEFAULT_HOST = 'http://localhost:11434'
 ACTIONS = {'hold': 0, 'buy': 1, 'sell': 2}
 
@@ -54,12 +55,19 @@ class OllamaClient:
         return None
 
     def chat_json(self, system, user):
-        out = self._request('/api/chat', {
+        payload = {
             'model': self.model, 'stream': False, 'format': 'json',
             'options': dict(self.options, temperature=0),
             'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
-        })
+        }
+        if self.thinking_model:
+            payload['think'] = False
+        out = self._request('/api/chat', payload)
         return json.loads(out['message']['content'])
+
+    @property
+    def thinking_model(self):
+        return self.model.split(':')[0].lower() in ('qwen3', 'deepseek-r1', 'qwq', 'magistral', 'gpt-oss')
 
 
 class LLMPolicy:

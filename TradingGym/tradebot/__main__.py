@@ -220,7 +220,7 @@ def main(argv=None):
     sub = p.add_subparsers(dest='cmd', required=True)
 
     def llm_args(sp):
-        sp.add_argument('--llm-model', help='model Ollama (domyslnie dobrany do GPU, np. qwen2.5:14b)')
+        sp.add_argument('--llm-model', help='model Ollama (domyslnie dobrany do GPU, np. qwen3:14b)')
         sp.add_argument('--ollama-host', help='domyslnie http://localhost:11434')
 
     sub.add_parser('hw').set_defaults(func=cmd_hw)
