@@ -33,7 +33,10 @@ def build_model(cfg, vec_env, profile, timesteps, seed=0, verbose=1):
                   policy_kwargs=policy_kwargs)
     if cfg.algo.upper() == 'PPO':
         n_steps = int(min(1024, max(64, timesteps // n_envs)))
-        return _algo_cls('PPO')(n_steps=n_steps, batch_size=int(min(profile.batch_size, n_steps * n_envs)),
+        rollout = n_steps * n_envs
+        # batch = dzielnik rozmiaru rundy (bez obcietej ostatniej porcji), najblizszy profilowi
+        batch = max((b for b in range(1, min(profile.batch_size, rollout) + 1) if rollout % b == 0))
+        return _algo_cls('PPO')(n_steps=n_steps, batch_size=int(batch),
                                 ent_coef=0.01, learning_rate=3e-4, gamma=0.99, **common)
     obs_dim = vec_env.observation_space.shape[0]
     return _algo_cls('DQN')(buffer_size=profile.dqn_buffer_size(obs_dim),
