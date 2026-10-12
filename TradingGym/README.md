@@ -1,5 +1,7 @@
 # TradingGym
 
+> **tradebot**: integracja z MetaTrader 5, trening RL (PPO/DQN), LLM przez Ollama i handel demo/live opisane są w [TRADEBOT.md](TRADEBOT.md).
+
 [![Build Status](https://travis-ci.org/Yvictor/TradingGym.svg?branch=master)](https://travis-ci.org/Yvictor/TradingGym)
 
 TradingGym is a toolkit for training and backtesting the reinforcement learning algorithms. This was inspired by OpenAI Gym and imitated the framework form. Not only traning env but also has backtesting and in the future will implement realtime trading env with Interactivate Broker API and so on.

@@ -277,7 +277,8 @@ class trading_env:
         else:
             self.obs_return = self.obs_state
 
-        return self.obs_return, self.obs_reward.sum(), done, self.info
+        # reward realized in this step only (obs_reward.sum() re-counted it for obs_len/step_len steps)
+        return self.obs_return, self.chg_reward.sum(), done, self.info
 
     def _gen_trade_color(self, ind, long_entry=(1, 0, 0, 0.5), long_cover=(1, 1, 1, 0.5), 
                          short_entry=(0, 1, 0, 0.5), short_cover=(1, 1, 1, 0.5)): 
