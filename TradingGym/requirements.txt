@@ -3,3 +3,9 @@ numpy
 matplotlib
 colour
 tables
+# tradebot (MT5 + RL + LLM)
+gymnasium
+stable-baselines3
+psutil
+MetaTrader5; sys_platform == "win32"
+# torch instaluje sie z stable-baselines3; dla RTX 5080 (CUDA) zobacz TRADEBOT.md

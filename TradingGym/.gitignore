@@ -87,3 +87,9 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# tradebot
+models/
+data/
+live_trades.csv
+STOP
