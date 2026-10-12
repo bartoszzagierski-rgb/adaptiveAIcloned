@@ -112,20 +112,24 @@ def run_backtest(df, cfg, policy):
 def summarize(tr, cfg, name):
     tr = tr.copy()
     tr['day'] = pd.to_datetime(tr['datetime']).dt.date
+    tr['reward_bps'] = tr['reward'] / tr['price'] * 1e4  # kazda transakcja wzgledem swojej ceny
     closes = tr[tr['reward_makereal'] != 0]
-    daily = tr.groupby('day')['reward'].sum()
-    mean_price = float(tr['price'].mean())
+    daily = tr.groupby('day')['reward_bps'].sum()
     pnl = float(tr['reward'].sum())
+    std = float(daily.std()) if len(daily) > 1 else 0.0
     return {
         'policy': name,
         'days': int(len(daily)),
+        'period': '{} .. {}'.format(tr['day'].min(), tr['day'].max()),
         'pnl_price_units': round(pnl, 6),
-        'pnl_bps': round(pnl / mean_price * 1e4, 2),
+        'pnl_bps': round(float(daily.sum()), 2),
+        'sharpe': round(float(daily.mean() / std * np.sqrt(252)), 3) if std > 1e-12 else 0.0,
         'trades': int((tr['position_variation'] != 0).sum()),
         'closing_trades': int(len(closes)),
         'win_rate': round(float((closes['reward'] > 0).mean()), 3) if len(closes) else None,
-        'best_day_bps': round(float(daily.max()) / mean_price * 1e4, 2),
-        'worst_day_bps': round(float(daily.min()) / mean_price * 1e4, 2),
+        'best_day_bps': round(float(daily.max()), 2),
+        'worst_day_bps': round(float(daily.min()), 2),
+        'max_drawdown_bps': round(float((daily.cumsum().cummax() - daily.cumsum()).max()), 2),
         'positive_days': int((daily > 0).sum()),
         'fee_per_unit': cfg.fee,
         'fee_bps': cfg.fee_bps,

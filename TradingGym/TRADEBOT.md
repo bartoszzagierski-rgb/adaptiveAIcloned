@@ -130,7 +130,7 @@ Co ustawia preset (train i live odczytują go same z danych i modelu):
 | `max_spread_bps` | 3 × mediana spreadu (jako % ceny) | brak nowych pozycji przy newsach i rolloverze |
 | sesja | handel od **05:00**, zamknięcie pozycji po **23:30** czasu serwera | tak samo jak w treningu: dzień = epizod, pierwsze 4 h to tylko obserwacja, pozycja zamknięta przed przerwą (bez swapów) |
 | lot / limity | 0,01 lota na jednostkę, max 3 jednostki, 2% dziennie, 10% łącznie | zobacz „Ryzyko” niżej |
-| trening | 10 mln kroków | ok. 2600 dni × ok. 230 decyzji, czyli ok. 16 przejść przez całą historię; na T7 rzędu 1–2 godzin |
+| trening | **do skutku**: sprawdzenie co 2 mln kroków, koniec po 10 sprawdzeniach bez poprawy (bezpieczniki: 300 mln kroków / 72 h) | zobacz „Trening do skutku i egzamin” niżej |
 
 Symbol jest wyszukiwany automatycznie, więc zadziała też u brokerów z nazwami `XAUUSDm`, `XAUUSD.pro` czy `GOLD`.
 
@@ -143,6 +143,25 @@ Symbol jest wyszukiwany automatycznie, więc zadziała też u brokerów z nazwam
 3. U góry kliknij **Current branch** i wybierz `claude/keen-bell-qfmyy8`. Po scaleniu PR wybierz `main`.
 4. Gdy pojawią się zmiany, kliknij **Fetch origin**, a potem **Pull origin**.
 5. Uruchamiaj z folderu `C:\Users\bzagi\adaptiveAIcloned\TradingGym`. Dane (`data/`), modele (`models/`) i logi są w `.gitignore`, więc aktualizacja ich nie nadpisze.
+
+## Trening do skutku i egzamin
+
+Dane dzielone są chronologicznie na trzy części:
+
+```
+|------------------- trening (~9 lat) -------------------|-- walidacja 6 mies. --|-- EGZAMIN 6 mies. --|
+```
+
+- **Trening.** Agent uczy się tylko na tej części.
+- **Walidacja.** Co 2 mln kroków agent gra na tych 6 miesiącach (bez uczenia się na nich). Jeśli wynik się poprawił (Sharpe dziennych wyników, czyli zysk względem wahań), model jest zapisywany jako najlepszy. Gdy 10 sprawdzeń z rzędu nie przynosi poprawy, model przestał się uczyć i trening się kończy. Model, który przestaje handlować, nie liczy się jako poprawa. Postęp na bieżąco trafia do `models\xauusd\progress.json`.
+- **Egzamin.** Ostatnie 6 miesięcy, których model nie widział ani w treningu, ani w walidacji. Na samym końcu gra na nich najlepszy model i agent losowy. Werdykt:
+  - **ZDAŁ**: zarabia na nowych danych, Sharpe ≥ 0,5, lepszy od losowego, handluje. Następny krok: dry-run i demo.
+  - **SŁABO**: lepszy od losowego, ale nie zarabia stabilnie. Nie nadaje się do handlu.
+  - **NIE ZDAŁ**: nie lepszy od losowego albo prawie nie handluje.
+
+Wynik zapisuje się w `models\xauusd\backtest.json`: `exam`, `rl_test` (egzamin), `random_test`, `rl_val`, `rl_train_last_6m`. Jeśli wynik na treningu jest dużo lepszy niż na egzaminie, model nauczył się historii na pamięć (przeuczenie).
+
+Trening można przerwać w dowolnej chwili przez **Ctrl+C**. Egzamin przejdzie wtedy od razu z najlepszym dotąd modelem. Limity zmienisz parametrami `--patience`, `--eval-every`, `--max-hours`, `--timesteps` i `--test-months`.
 
 ## Uczenie ciągłe: douczanie co tydzień (`retrain`)
 

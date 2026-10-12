@@ -111,11 +111,14 @@ def cmd_train(args):
         cfg.fee = cfg.fee_at(float(df['price'].iloc[-1]))
     log.info('Dane: %d swiec/tickow, %d dni (%s .. %s)', len(df), df['datetime'].dt.date.nunique(),
              df['datetime'].iloc[0].date(), df['datetime'].iloc[-1].date())
-    args.timesteps = args.timesteps or pre.get('timesteps', 1_000_000)
+    args.timesteps = args.timesteps or pre.get('max_timesteps', 1_000_000)
     log.info('Sprzet: %s', profile.describe())
     log.info('Konfiguracja: %s', cfg)
-    _, results = train(df, cfg, args.timesteps, args.out, profile, test_frac=args.test_frac, seed=args.seed,
-                       n_envs=args.n_envs)
+    _, results = train(df, cfg, args.timesteps, args.out, profile, test_months=args.test_months,
+                       val_months=args.val_months, seed=args.seed, n_envs=args.n_envs,
+                       eval_every=args.eval_every or pre.get('eval_every'),
+                       patience=args.patience or pre.get('patience', 10),
+                       max_hours=args.max_hours or pre.get('max_hours'))
     print(json.dumps(results, indent=2))
 
 
@@ -294,14 +297,19 @@ def main(argv=None):
     sp.add_argument('--symbol')
     sp.add_argument('--algo', choices=['PPO', 'DQN', 'ppo', 'dqn'], default='PPO')
     sp.add_argument('--preset', help='domyslnie z pliku .meta.json danych')
-    sp.add_argument('--timesteps', type=int, help='domyslnie 1M (xauusd: 3M)')
+    sp.add_argument('--timesteps', type=int, help='MAKSYMALNA liczba krokow (xauusd: 300M); zwykle konczy sie '
+                    'wczesniej, gdy model przestaje sie poprawiac')
+    sp.add_argument('--eval-every', type=int, help='co ile krokow sprawdzac na walidacji (xauusd: 2M)')
+    sp.add_argument('--patience', type=int, help='ile sprawdzen bez poprawy konczy nauke (xauusd: 10)')
+    sp.add_argument('--max-hours', type=float, help='limit czasu treningu w godzinach (xauusd: 72)')
+    sp.add_argument('--test-months', type=int, default=6, help='egzamin na ostatnich N miesiacach')
+    sp.add_argument('--val-months', type=int, default=6, help='walidacja: N miesiecy przed egzaminem')
     sp.add_argument('--obs-len', type=int, help='domyslnie 64 (xauusd: 48)')
     sp.add_argument('--step-len', type=int, help='domyslnie 16 (xauusd: 1)')
     sp.add_argument('--max-position', type=int, help='domyslnie 3')
     sp.add_argument('--fee', type=float, help='koszt zamkniecia 1 jednostki w cenie (domyslnie mediana spreadu)')
     sp.add_argument('--n-envs', type=int, help='domyslnie liczba watkow CPU - 2')
     sp.add_argument('--device', choices=['cuda', 'cpu'], help='domyslnie cuda jesli dostepna')
-    sp.add_argument('--test-frac', type=float, default=0.2)
     sp.add_argument('--seed', type=int, default=0)
     sp.set_defaults(func=cmd_train)
 

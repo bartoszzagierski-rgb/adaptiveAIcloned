@@ -99,7 +99,7 @@ def test_train_ppo_and_dqn_smoke(tick_df, tmp_path):
     for algo in ('PPO', 'DQN'):
         out = str(tmp_path / algo)
         _, res = train(tick_df, cfg(algo=algo), 512, out, prof, n_envs=2)
-        assert set(res) == {'rl_test', 'random_test', 'rl_train'}
+        assert {'rl_test', 'random_test', 'rl_val', 'rl_train_last_6m', 'exam', 'training'} <= set(res)
         model, c = load_model(out, device='cpu')
         assert c.algo == algo and os.path.exists(os.path.join(out, 'backtest.json'))
 
@@ -319,3 +319,32 @@ def test_retrain_champion_challenger_and_live_reload(tmp_path, tick_df, monkeypa
         assert os.listdir(os.path.join(out, 'history'))
     e2 = tr.retrain(out, more, prof, 128, holdout_days=2, n_envs=1, min_gain_bps=1e9)
     assert not e2['promoted']
+
+
+def test_train_stops_when_no_progress_and_exam(tick_df, tmp_path):
+    from tradebot.hardware import detect
+    from tradebot.train import train
+    prof = detect()
+    prof.cuda = False
+    out = str(tmp_path / 'es')
+    _, res = train(tick_df, cfg(), 1_000_000, out, prof, n_envs=1, eval_every=64, patience=2)
+    prog = json.load(open(os.path.join(out, 'progress.json')))
+    assert res['training']['stop_reason'].startswith('brak poprawy') and prog['history'][-1]['step'] < 1_000_000
+    assert res['exam']['verdict'] in ('ZDAL', 'SLABO', 'NIE ZDAL')
+
+
+def test_split_periods_months():
+    from tradebot.mt5_data import _finalize, split_periods
+    t = pd.date_range('2016-01-01', '2026-01-01', freq='12h')
+    df = _finalize(pd.DataFrame({'datetime': t, 'price': 1.0, 'spread': 0.0, 'volume': 0.0}))
+    tr, va, te = split_periods(df, 6, 6)
+    assert te['datetime'].min() >= pd.Timestamp('2025-07-01') and va['datetime'].min() >= pd.Timestamp('2025-01-01')
+    assert tr['datetime'].max() < va['datetime'].min() and va['datetime'].max() < te['datetime'].min()
+
+
+def test_exam_verdict():
+    from tradebot.train import exam_verdict
+    base = dict(days=120, positive_days=70)
+    assert exam_verdict(dict(base, trades=500, pnl_bps=300, sharpe=1.2), dict(trades=900, pnl_bps=-800))[0] == 'ZDAL'
+    assert exam_verdict(dict(base, trades=5, pnl_bps=0, sharpe=0), dict(trades=900, pnl_bps=-800))[0] == 'NIE ZDAL'
+    assert exam_verdict(dict(base, trades=500, pnl_bps=-50, sharpe=-0.1), dict(trades=900, pnl_bps=-800))[0] == 'SLABO'

@@ -207,6 +207,31 @@ def split_days(df, test_frac=0.2):
             _finalize(df[d >= cut].drop(columns='serial_number')))
 
 
+def split_periods(df, test_months=6, val_months=6, min_train_days=20):
+    """Podzial chronologiczny na (trening, walidacja, test).
+
+    test  = ostatnie `test_months` miesiecy - egzamin koncowy, model ich nie widzi do samego konca,
+    val   = `val_months` miesiecy przed testem - do decyzji, kiedy model przestal sie poprawiac,
+    trening = wszystko wczesniej.
+    Gdy danych jest za malo na miesiace, dzieli dni proporcjonalnie (60/20/20).
+    """
+    d = df['datetime'].dt.date
+    days = sorted(d.unique())
+    end = pd.Timestamp(days[-1])
+    test_cut = (end - pd.DateOffset(months=test_months)).date()
+    val_cut = (end - pd.DateOffset(months=test_months + val_months)).date()
+    if sum(x < val_cut for x in days) < min_train_days:
+        n = len(days)
+        if n < 3:
+            return df, df, df
+        n_test = n_val = max(1, int(round(n * 0.2)))
+        val_cut, test_cut = days[n - n_test - n_val], days[n - n_test]
+
+    def part(mask):
+        return _finalize(df[mask].drop(columns='serial_number'))
+    return part(d < val_cut), part((d >= val_cut) & (d < test_cut)), part(d >= test_cut)
+
+
 def median_spread_bps(df, last_days=250):
     """Mediana spreadu jako ulamek ceny (bps) z ostatnich `last_days` dni - aktualne warunki brokera."""
     if 'spread' not in df:

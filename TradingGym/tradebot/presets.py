@@ -21,7 +21,9 @@ PRESETS = {
         'obs_len': 48, 'step_len': 1, 'max_position': 3,
         'fee_mult': 1.5, 'max_spread_mult': 3.0,
         'session_start': '05:00', 'flat_after': '23:30',
-        'timesteps': 10_000_000,  # ~2600 dni x ~230 decyzji = ~600k krokow na przejscie -> ~16 przejsc
+        # trening do skutku: sprawdzenie na walidacji co 2M krokow, koniec po 10 sprawdzeniach bez poprawy
+        # (min. ~20M krokow); bezpieczniki: 300M krokow albo 72 h
+        'max_timesteps': 300_000_000, 'eval_every': 2_000_000, 'patience': 10, 'max_hours': 72,
         'lot': 0.01, 'max_daily_loss_pct': 2.0, 'max_drawdown_pct': 10.0,
         # douczanie (retrain): ostatnie 180 dni, 10 ostatnich dni jako sprawdzian
         'retrain_days': 180, 'retrain_holdout_days': 10, 'retrain_timesteps': 500_000,
