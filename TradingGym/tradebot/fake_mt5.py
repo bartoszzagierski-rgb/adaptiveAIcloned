@@ -104,8 +104,16 @@ class FakeMT5:
 
     def account_info(self):
         equity = self.balance + sum(self._profit(p) for p in self.positions)
+        margin = sum(self.order_calc_margin(p.type, p.symbol, p.volume, p.price_open) for p in self.positions)
         return SimpleNamespace(login=12345678, server='Fake-Demo', trade_mode=self.trade_mode, balance=self.balance,
-                               equity=equity, currency='USD', trade_allowed=True, leverage=100)
+                               equity=equity, margin=margin, margin_free=equity - margin, currency=self.currency,
+                               trade_allowed=True, leverage=20)
+
+    currency = 'USD'
+
+    def order_calc_margin(self, order_type, symbol, volume, price):
+        contract = 100.0 if self.point >= 0.01 else 100000.0
+        return volume * contract * price / 20.0  # dzwignia 1:20
 
     def terminal_info(self):
         return SimpleNamespace(trade_allowed=True, connected=True)

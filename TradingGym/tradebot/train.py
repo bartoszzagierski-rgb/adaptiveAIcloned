@@ -80,3 +80,61 @@ def evaluate(model, cfg, train_df, test_df, out_dir=None):
 def load_model(model_dir, device='auto'):
     cfg = AgentConfig.load(model_dir)
     return _algo_cls(cfg.algo).load(os.path.join(model_dir, 'model.zip'), device=device), cfg
+
+
+def retrain(model_dir, df, profile, timesteps, holdout_days=10, n_envs=None, seed=0, min_gain_bps=0.0):
+    """Douczanie typu champion/challenger (walk-forward).
+
+    1. Ostatnie `holdout_days` dni odkladamy jako sprawdzian - model ich nie widzi.
+    2. Challenger = kopia obecnego modelu douczona na swiezych danych (reszta df).
+    3. Oba modele + agent losowy graja na dniach sprawdzianu.
+    4. Challenger zastepuje obecny model tylko gdy jest lepszy o >= min_gain_bps i lepszy od losowego.
+       Stary model trafia do history/ (mozna wrocic).
+    """
+    import shutil
+    import time as _time
+    from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
+
+    configure_torch(profile)
+    champion, cfg = load_model(model_dir, device=profile.device)
+    days = sorted(df['datetime'].dt.date.unique())
+    if len(days) <= holdout_days + 5:
+        raise ValueError('Za malo dni ({}) do douczania z {} dniami sprawdzianu'.format(len(days), holdout_days))
+    train_df, test_df = split_days(df, holdout_days / len(days))
+    n_envs = n_envs or profile.n_envs
+    fns = [partial(_make_env, train_df, cfg, seed + i) for i in range(n_envs)]
+    vec = VecMonitor(SubprocVecEnv(fns) if n_envs > 1 else DummyVecEnv(fns))
+    try:
+        challenger = _algo_cls(cfg.algo).load(os.path.join(model_dir, 'model.zip'), env=vec, device=profile.device)
+        challenger.learn(total_timesteps=timesteps, reset_num_timesteps=False, progress_bar=False)
+    finally:
+        vec.close()
+    res = {
+        'champion': run_backtest(test_df, cfg, RLPolicy(champion))[0],
+        'challenger': run_backtest(test_df, cfg, RLPolicy(challenger))[0],
+        'random': run_backtest(test_df, cfg, RandomPolicy())[0],
+    }
+    gain = res['challenger']['pnl_bps'] - res['champion']['pnl_bps']
+    promote = gain >= min_gain_bps and res['challenger']['pnl_bps'] > res['random']['pnl_bps']
+    stamp = _time.strftime('%Y%m%d-%H%M%S')
+    if promote:
+        hist = os.path.join(model_dir, 'history')
+        os.makedirs(hist, exist_ok=True)
+        shutil.copy2(os.path.join(model_dir, 'model.zip'), os.path.join(hist, 'model-{}.zip'.format(stamp)))
+        tmp = os.path.join(model_dir, 'model.new.zip')
+        challenger.save(tmp)
+        os.replace(tmp, os.path.join(model_dir, 'model.zip'))  # atomowo - live przeladuje nowy model
+    entry = {'time': stamp, 'train_days': len(days) - holdout_days, 'holdout_days': holdout_days,
+             'timesteps': timesteps, 'gain_bps': round(gain, 2), 'promoted': promote, 'results': res}
+    path = os.path.join(model_dir, 'retrain_log.json')
+    hist_log = []
+    if os.path.exists(path):
+        with open(path, encoding='utf-8') as f:
+            hist_log = json.load(f)
+    hist_log.append(entry)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(hist_log, f, indent=2)
+    log.info('Douczanie: challenger %+.1f bps vs champion %+.1f bps (losowy %+.1f) -> %s',
+             res['challenger']['pnl_bps'], res['champion']['pnl_bps'], res['random']['pnl_bps'],
+             'NOWY MODEL WDROZONY' if promote else 'zostaje obecny model')
+    return entry

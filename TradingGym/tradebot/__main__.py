@@ -7,6 +7,7 @@
   llm-check - sprawdz czy Ollama dziala i ma model
   review    - LLM ocenia wyniki backtestu i proponuje zmiany
   live      - handel na koncie demo albo realnym (MT5)
+  retrain   - douczanie na swiezych danych z MT5 (champion/challenger), np. co weekend
   doctor    - sprawdz wersje: Python, pakiety, GPU/CUDA, Ollama + model, MT5
 
 Gotowe ustawienia: --preset xauusd (fetch), dalej train/live biora je automatycznie.
@@ -171,8 +172,20 @@ def cmd_live(args):
     mt5 = _mt5(args, cfg.symbol)
     cfg.symbol = resolve_symbol(cfg.symbol)
     args.lot = args.lot or pre.get('lot', 0.01)
-    if args.max_daily_loss is None and args.mode == 'demo':
-        args.max_daily_loss = pre.get('max_daily_loss')
+    if args.max_daily_loss_pct is None and (args.mode == 'demo' or args.max_daily_loss is None):
+        args.max_daily_loss_pct = pre.get('max_daily_loss_pct', 2.0 if args.mode == 'demo' else None)
+    if args.max_drawdown_pct is None:
+        args.max_drawdown_pct = pre.get('max_drawdown_pct')
+    model_file = os.path.join(args.model, 'model.zip')
+    state = {'mtime': os.path.getmtime(model_file)}
+
+    def reload_if_retrained(trader):
+        # nowy dzien: jesli 'retrain' wdrozyl nowy model, przeladuj go (pozycje zostaja)
+        m = os.path.getmtime(model_file)
+        if m != state['mtime']:
+            state['mtime'] = m
+            trader.policy = RLPolicy(load_model(args.model, device='cpu')[0])
+            log.info('Przeladowano douczony model z %s', model_file)
     confirm = False
     if args.mode == 'live':
         if not args.i_understand_live_risk:
@@ -194,7 +207,9 @@ def cmd_live(args):
     trader = LiveTrader(cfg, RLPolicy(model), mt5, mode=args.mode, dry_run=args.dry_run, lot=args.lot,
                         max_daily_loss=args.max_daily_loss, max_spread=args.max_spread, supervisor=supervisor,
                         poll_interval=args.poll, close_on_exit=args.close_on_exit, log_path=args.log,
-                        confirm_live=confirm)
+                        confirm_live=confirm, max_daily_loss_pct=args.max_daily_loss_pct,
+                        max_drawdown_pct=args.max_drawdown_pct, risk_capital=args.risk_capital,
+                        on_new_day=reload_if_retrained)
     if args.fake_mt5:  # symulator: czas plynie szybciej, zeby bylo widac decyzje
         import time
         from .fake_mt5 import _TF_SECONDS
@@ -204,6 +219,35 @@ def cmd_live(args):
     else:
         trader.run(max_iterations=args.max_iterations)
     print('Koniec. Decyzji: {}. Log: {}'.format(trader.decisions, args.log))
+
+
+def cmd_retrain(args):
+    from . import mt5_data, presets
+    from .config import AgentConfig
+    from .hardware import detect
+    from .train import retrain
+    cfg = AgentConfig.load(args.model)
+    pre = presets.get(cfg.preset)
+    days = args.days or pre.get('retrain_days', 180)
+    if args.data:
+        df = mt5_data.load_dataset(args.data)
+    else:
+        mt5 = _mt5(args, cfg.symbol)
+        symbol = mt5_data.resolve_symbol(cfg.symbol)
+        end = datetime.fromtimestamp(mt5.symbol_info_tick(symbol).time, tz=timezone.utc)
+        start = end - timedelta(days=days)
+        if cfg.source == 'ticks':
+            df = mt5_data.ticks_to_gym(mt5_data.fetch_ticks(symbol, start, end), cfg.price_source)
+        else:
+            raw, point = mt5_data.fetch_bars(symbol, cfg.timeframe, start, end)
+            df = mt5_data.bars_to_gym(raw, point)
+    profile = detect(args.model)
+    if args.device:
+        profile.cuda = args.device == 'cuda'
+    entry = retrain(args.model, df, profile, args.timesteps or pre.get('retrain_timesteps', 300_000),
+                    holdout_days=args.holdout_days or pre.get('retrain_holdout_days', 10), n_envs=args.n_envs,
+                    min_gain_bps=args.min_gain_bps)
+    print(json.dumps(entry, indent=2))
 
 
 def cmd_doctor(args):
@@ -278,7 +322,10 @@ def main(argv=None):
     sp.add_argument('--mode', choices=['demo', 'live'], default='demo')
     sp.add_argument('--dry-run', action='store_true', help='bez zlecen, pozycje na papierze')
     sp.add_argument('--lot', type=float, help='wolumen 1 jednostki agenta (domyslnie 0.01)')
-    sp.add_argument('--max-daily-loss', type=float, help='w walucie konta; wymagane dla live')
+    sp.add_argument('--max-daily-loss', type=float, help='kwota w walucie konta')
+    sp.add_argument('--max-daily-loss-pct', type=float, help='%% kapitalu na dzien (xauusd/demo: 2)')
+    sp.add_argument('--max-drawdown-pct', type=float, help='stop gdy strata od startu >= %% kapitalu (xauusd: 10)')
+    sp.add_argument('--risk-capital', type=float, help='licz limity od tej kwoty, jesli konto jest wieksze')
     sp.add_argument('--max-spread', type=float, help='nie otwieraj pozycji gdy spread (w cenie) wiekszy '
                     '(domyslnie z treningu: xauusd = 3 x mediana)')
     sp.add_argument('--llm-veto', action='store_true', help='LLM zatwierdza kazda akcje agenta')
@@ -290,6 +337,18 @@ def main(argv=None):
     sp.add_argument('--fake-mt5', action='store_true')
     llm_args(sp)
     sp.set_defaults(func=cmd_live)
+
+    sp = sub.add_parser('retrain')
+    sp.add_argument('--model', required=True)
+    sp.add_argument('--data', help='plik danych; domyslnie pobiera swieze dane z MT5')
+    sp.add_argument('--days', type=int, help='ile ostatnich dni (xauusd: 180)')
+    sp.add_argument('--holdout-days', type=int, help='ostatnie N dni jako sprawdzian (xauusd: 10)')
+    sp.add_argument('--timesteps', type=int, help='kroki douczania (xauusd: 500k)')
+    sp.add_argument('--min-gain-bps', type=float, default=0.0, help='o ile nowy model musi byc lepszy')
+    sp.add_argument('--n-envs', type=int)
+    sp.add_argument('--device', choices=['cuda', 'cpu'])
+    sp.add_argument('--fake-mt5', action='store_true')
+    sp.set_defaults(func=cmd_retrain)
 
     sp = sub.add_parser('doctor')
     sp.add_argument('--symbol', default='XAUUSD')

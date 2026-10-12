@@ -4,7 +4,8 @@ Zabezpieczenia:
   * tryb 'demo' odmowi pracy na koncie realnym, tryb 'live' - na koncie demo,
   * 'live' wymaga flagi --i-understand-live-risk i wpisania numeru konta,
   * --dry-run: zadnych zlecen, pozycje tylko na papierze (dobry pierwszy krok),
-  * limit dziennej straty (zamyka pozycje bota i zatrzymuje), limit spreadu przy otwieraniu,
+  * limit dziennej straty (kwota albo % kapitalu) i maksymalnego obsuniecia od startu - zamyka pozycje bota
+    i zatrzymuje, kontrola wolnego depozytu przed otwarciem, limit spreadu przy otwieraniu,
   * max pozycja z konfiguracji modelu, bot dotyka tylko swoich pozycji (magic number),
   * plik STOP w katalogu roboczym zatrzymuje bota, Ctrl+C - bezpieczne wyjscie,
   * opcjonalny nadzor LLM (LLMSupervisor) - wstrzymuje akcje, ktore uzna za ryzykowne,
@@ -150,12 +151,16 @@ class PaperBook:
 class LiveTrader:
     def __init__(self, cfg, policy, mt5, mode='demo', dry_run=False, lot=0.01, max_daily_loss=None,
                  max_spread=None, supervisor=None, poll_interval=1.0, magic=DEFAULT_MAGIC, close_on_exit=False,
-                 stop_file='STOP', log_path='live_trades.csv', confirm_live=False, deviation=20):
+                 stop_file='STOP', log_path='live_trades.csv', confirm_live=False, deviation=20,
+                 max_daily_loss_pct=None, max_drawdown_pct=None, risk_capital=None, max_margin_use=0.5,
+                 on_new_day=None):
         if mode not in ('demo', 'live'):
             raise ValueError('mode musi byc demo albo live')
         self.cfg, self.policy, self.mt5 = cfg, policy, mt5
         self.mode, self.dry_run, self.lot = mode, dry_run, lot
         self.max_daily_loss = max_daily_loss
+        self.max_daily_loss_pct, self.max_drawdown_pct = max_daily_loss_pct, max_drawdown_pct
+        self.risk_capital, self.max_margin_use, self.on_new_day = risk_capital, max_margin_use, on_new_day
         self.max_spread = max_spread if max_spread is not None else cfg.max_spread
         self.supervisor, self.poll_interval, self.magic = supervisor, poll_interval, magic
         self.close_on_exit, self.stop_file, self.log_path = close_on_exit, stop_file, log_path
@@ -178,8 +183,8 @@ class LiveTrader:
                 raise LiveError('Tryb live wymaga konta realnego (zalogowane {} to nie konto realne).'.format(acc.login))
             if not self.confirm_live:
                 raise LiveError('Handel live nie zostal potwierdzony.')
-            if self.max_daily_loss is None:
-                raise LiveError('Handel live wymaga ustawienia --max-daily-loss.')
+            if self.max_daily_loss is None and self.max_daily_loss_pct is None:
+                raise LiveError('Handel live wymaga ustawienia --max-daily-loss albo --max-daily-loss-pct.')
         if not self.dry_run:
             term = mt5.terminal_info()
             if not (acc.trade_allowed and term.trade_allowed):
@@ -193,7 +198,14 @@ class LiveTrader:
         self.feed = TickFeed(mt5, self.cfg) if self.cfg.source == 'ticks' else BarFeed(mt5, self.cfg)
         self.feed.warmup()
         self.day = None
+        self.currency = getattr(acc, 'currency', '')
+        self.start_equity = acc.equity
         self._roll_day(acc)
+        margin = self._margin(mt5.ORDER_TYPE_BUY, self.volume)
+        log.info('Konto: saldo %.2f %s, kapital do limitow %.2f, depozyt na 1 jednostke (%.2f lota) %s, '
+                 'limit dzienny %.2f, max obsuniecie %s', acc.balance, self.currency, self.capital(acc),
+                 self.volume, 'n/d' if margin is None else '{:.2f}'.format(margin), self.daily_limit(),
+                 '-' if self.max_drawdown_pct is None else '{}%'.format(self.max_drawdown_pct))
         self.running = True
         log.info('Start: %s%s, konto %s (%s), %s, lot %.2f na jednostke, max pozycja %d, max spread %s, sesja %s-%s',
                  self.mode.upper(), ' DRY-RUN' if self.dry_run else '', acc.login, acc.server,
@@ -205,10 +217,32 @@ class LiveTrader:
         v = round(round(v / step) * step, 8)
         return float(min(max(v, self.sym.volume_min), self.sym.volume_max))
 
+    def capital(self, acc=None):
+        """Kapital, od ktorego licza sie limity % - equity konta, najwyzej --risk-capital."""
+        eq = (acc or self.mt5.account_info()).equity
+        return min(eq, self.risk_capital) if self.risk_capital else eq
+
+    def daily_limit(self):
+        limits = [x for x in (self.max_daily_loss,
+                              None if self.max_daily_loss_pct is None else
+                              self.day_start_capital * self.max_daily_loss_pct / 100.0) if x is not None]
+        return min(limits) if limits else float('inf')
+
+    def _margin(self, order_type, volume):
+        try:
+            tick = self.mt5.symbol_info_tick(self.cfg.symbol)
+            price = tick.ask if order_type == self.mt5.ORDER_TYPE_BUY else tick.bid
+            return self.mt5.order_calc_margin(order_type, self.cfg.symbol, volume, price)
+        except Exception:
+            return None
+
     def _roll_day(self, acc):
         today = datetime.now(timezone.utc).date()
         if today != self.day:
+            if self.day is not None and self.on_new_day:
+                self.on_new_day(self)
             self.day = today
+            self.day_start_capital = self.capital(acc)
             self.day_start_equity = acc.equity
             self.day_start_paper = self.paper.realized if self.paper else 0.0
 
@@ -268,6 +302,12 @@ class LiveTrader:
         opening = (action == 1 and units >= -1e-9) or (action == 2 and units <= 1e-9)
         if opening and self.max_spread is not None and spread > self.max_spread:
             return 'skip: spread {:.6f} > {:.6f}'.format(spread, self.max_spread)
+        if opening and not self.dry_run:
+            order = mt5.ORDER_TYPE_BUY if action == 1 else mt5.ORDER_TYPE_SELL
+            need, acc = self._margin(order, self.volume), mt5.account_info()
+            if need is not None and need > acc.margin_free * self.max_margin_use:
+                return 'skip: depozyt {:.2f} > {:.0%} wolnego depozytu {:.2f}'.format(
+                    need, self.max_margin_use, acc.margin_free)
         if action == 1:
             if units < -1e-9:
                 return 'close short: {}'.format(self._close_one(mt5.POSITION_TYPE_SELL)[0])
@@ -292,10 +332,19 @@ class LiveTrader:
             log.error('Utracono polaczenie z MT5: %s', self.mt5.last_error())
             return False
         self._roll_day(acc)
-        if self.max_daily_loss is not None and not self.dry_run:
-            loss = self.day_start_equity - acc.equity
-            if loss >= self.max_daily_loss:
-                log.error('Dzienna strata %.2f >= limit %.2f - zamykam pozycje bota i koncze.', loss, self.max_daily_loss)
+        if self.dry_run:
+            return True
+        loss = self.day_start_equity - acc.equity
+        if loss >= self.daily_limit():
+            log.error('Dzienna strata %.2f %s >= limit %.2f - zamykam pozycje bota i koncze.', loss, self.currency,
+                      self.daily_limit())
+            self.close_all()
+            return False
+        if self.max_drawdown_pct is not None:
+            base = min(self.start_equity, self.risk_capital) if self.risk_capital else self.start_equity
+            if self.start_equity - acc.equity >= base * self.max_drawdown_pct / 100.0:
+                log.error('Obsuniecie od startu %.2f %s >= %.1f%% kapitalu - zamykam pozycje bota i koncze.',
+                          self.start_equity - acc.equity, self.currency, self.max_drawdown_pct)
                 self.close_all()
                 return False
         return True

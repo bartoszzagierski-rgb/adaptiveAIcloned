@@ -20,7 +20,9 @@ PRESETS = {
         'fee_mult': 1.5, 'max_spread_mult': 3.0,
         'session_start': '05:00', 'flat_after': '23:30',
         'timesteps': 3_000_000,
-        'lot': 0.01, 'max_daily_loss': 50.0,
+        'lot': 0.01, 'max_daily_loss_pct': 2.0, 'max_drawdown_pct': 10.0,
+        # douczanie (retrain): ostatnie 180 dni, 10 ostatnich dni jako sprawdzian
+        'retrain_days': 180, 'retrain_holdout_days': 10, 'retrain_timesteps': 500_000,
     },
 }
 

@@ -129,7 +129,7 @@ Co ustawia preset (train i live odczytują go same z danych i modelu):
 | koszt `fee` | 1,5 × mediana spreadu | spread ze świec MT5 to minimum, a dochodzi poślizg |
 | `max_spread` | 3 × mediana spreadu | brak nowych pozycji przy newsach i rolloverze |
 | sesja | handel od **05:00**, zamknięcie pozycji po **23:30** czasu serwera | tak samo jak w treningu: dzień = epizod, pierwsze 4 h to tylko obserwacja, pozycja zamknięta przed przerwą (bez swapów) |
-| lot / limit | 0,01 lota na jednostkę, max 3 jednostki, limit straty demo 50 | 0,01 lota złota to ok. 1 USD na każdy 1 USD ruchu ceny |
+| lot / limity | 0,01 lota na jednostkę, max 3 jednostki, 2% dziennie, 10% łącznie | zobacz „Ryzyko” niżej |
 | trening | 3 mln kroków | |
 
 Symbol jest wyszukiwany automatycznie, więc zadziała też u brokerów z nazwami `XAUUSDm`, `XAUUSD.pro` czy `GOLD`.
@@ -143,6 +143,46 @@ Symbol jest wyszukiwany automatycznie, więc zadziała też u brokerów z nazwam
 3. U góry kliknij **Current branch** i wybierz `claude/keen-bell-qfmyy8`. Po scaleniu PR wybierz `main`.
 4. Gdy pojawią się zmiany, kliknij **Fetch origin**, a potem **Pull origin**.
 5. Uruchamiaj z folderu `C:\Users\bzagi\adaptiveAIcloned\TradingGym`. Dane (`data/`), modele (`models/`) i logi są w `.gitignore`, więc aktualizacja ich nie nadpisze.
+
+## Uczenie ciągłe: douczanie co tydzień (`retrain`)
+
+Agent **nie uczy się w trakcie handlu**. Na żywo działa na zamrożonym modelu, a uczy się osobno, na nowych danych, metodą champion/challenger:
+
+```bat
+python -m tradebot retrain --model models\xauusd
+```
+1. Pobiera z MT5 ostatnie 180 dni (świece M5).
+2. Ostatnie 10 dni odkłada jako sprawdzian, którego model nie widzi.
+3. Douczanie kopii obecnego modelu (challenger) na pozostałych dniach, 500 tys. kroków.
+4. Obecny model, challenger i agent losowy grają na dniach sprawdzianu.
+5. Challenger zastępuje model **tylko jeśli** wypadł lepiej od obecnego i od losowego. Stary model trafia do `models\xauusd\history\`, a każdy przebieg zapisuje się w `retrain_log.json`.
+6. Uruchomiony `live` sam przeładuje nowy model na początku kolejnego dnia. Otwarte pozycje zostają.
+
+Dlaczego nie uczenie się w locie, transakcja po transakcji:
+- Z rynku przychodzi ok. 200 decyzji dziennie, a trening potrzebuje milionów. Uczenie na kilkuset przykładach przestawia sieć pod ostatnie godziny szumu.
+- Nauka wymaga eksploracji, czyli celowo przypadkowych decyzji. Na żywo oznacza to losowe zlecenia za prawdziwe pieniądze.
+- Bez sprawdzianu nie wiadomo, czy model się poprawił, czy zepsuł. Champion/challenger tego pilnuje.
+
+Automatycznie co sobotę o 10:00, kiedy rynek złota jest zamknięty, a MT5 włączony. W cmd **jako administrator**, jedna linia:
+```bat
+schtasks /Create /SC WEEKLY /D SAT /ST 10:00 /TN "tradebot retrain" /TR "cmd /c cd /d C:\Users\bzagi\Documents\GitHub\adaptiveAIcloned\TradingGym && C:\Users\bzagi\AppData\Local\Python\pythoncore-3.12-64\python.exe -m tradebot retrain --model models\xauusd >> retrain.log 2>&1"
+```
+Sprawdzenie: `schtasks /Query /TN "tradebot retrain"`. Usunięcie: `schtasks /Delete /TN "tradebot retrain" /F`.
+
+## Ryzyko: lot 0,01 i konto 10 000 zł
+
+Bot zawsze handluje **0,01 lota** na jednostkę (`--lot`, domyślnie 0,01) i ma najwyżej 3 jednostki, czyli maksymalnie 0,03 lota. Saldo konta odczytuje sam z MT5 i od niego liczy limity:
+
+| Zabezpieczenie | Domyślnie (xauusd) | Przy 10 000 zł |
+|---|---|---|
+| `--max-daily-loss-pct` | 2% kapitału na dzień | stop po stracie 200 zł w ciągu dnia: zamyka pozycje i kończy |
+| `--max-drawdown-pct` | 10% od uruchomienia | stop po łącznej stracie 1 000 zł |
+| kontrola depozytu | depozyt na nową pozycję ≤ 50% wolnego depozytu | przy dźwigni 1:20 jedna jednostka (1 uncja przy ok. 4170 USD) to ok. 210 USD, czyli ok. 750–800 zł depozytu |
+| `--risk-capital` | brak | jeśli konto jest większe (albo w innej walucie), limity liczą się od tej kwoty |
+
+Skala ruchów: 0,01 lota złota to 1 uncja, więc ruch ceny o 1 USD to 1 USD zysku lub straty na jednostkę (ok. 3,6–4 zł). Typowy dzienny zakres złota to kilkadziesiąt USD, czyli przy 3 jednostkach kilkaset zł. Dlatego limit dzienny 2% jest ważny.
+
+Limity liczą się w **walucie konta**. Jeśli konto demo jest w USD, a chcesz limitów jak dla 10 000 zł, podaj `--risk-capital` w USD, np. `--risk-capital 2700`.
 
 ## Zabezpieczenia w handlu
 

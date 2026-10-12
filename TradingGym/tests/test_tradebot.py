@@ -271,3 +271,50 @@ def test_cli_xauusd_preset_pipeline(tmp_path, monkeypatch):
     assert c.fee == pytest.approx(0.45) and c.max_spread == pytest.approx(0.9) and c.flat_after == '23:30'
     main(['live', '--fake-mt5', '--model', 'g', '--dry-run', '--max-iterations', '10', '--poll', '0'])
     mt5_data.use_module(None)
+
+
+def test_pct_limits_and_margin_with_10k_pln(tmp_path):
+    f = FakeMT5(base_price=2400.0, now=default_fake().now())
+    f.currency, f.balance = 'PLN', 10000.0
+    mt5_data.use_module(f)
+    c = cfg(symbol='XAUUSDm')
+    t = LiveTrader(c, AlwaysBuy(), f, log_path=None, stop_file=None, max_daily_loss_pct=2.0,
+                   max_drawdown_pct=10.0)
+    t.start()
+    assert t.daily_limit() == pytest.approx(200.0)  # 2% z 10 000 zl
+    _steps(f, t, 3)
+    assert t.position_state(2400)[0] > 0
+    f.balance -= 250  # strata > 200 zl -> stop i zamkniecie
+    assert t.iteration() is None and not t.running and t.position_state(2400)[0] == 0
+    # depozyt: przy malym wolnym depozycie bot nie otwiera pozycji
+    t2 = LiveTrader(c, AlwaysBuy(), f, log_path=None, stop_file=None, max_margin_use=0.0001)
+    t2.start()
+    recs = _steps(f, t2, 3)
+    assert recs and all(r['result'].startswith('skip: depozyt') for r in recs)
+    mt5_data.use_module(None)
+
+
+def test_retrain_champion_challenger_and_live_reload(tmp_path, tick_df, monkeypatch):
+    from tradebot import train as tr
+    from tradebot.hardware import detect
+    prof = detect()
+    prof.cuda = False
+    out = str(tmp_path / 'm')
+    tr.train(tick_df, cfg(), 256, out, prof, n_envs=1)
+    days = tick_df['datetime'].dt.date.unique()
+    more = tick_df.copy()
+    for k in range(1, 3):  # 9 dni danych: 3 oryginalne x3
+        extra = tick_df.copy()
+        extra['datetime'] += pd.Timedelta(days=3 * k)
+        more = pd.concat([more, extra])
+    more = mt5_data._finalize(more.drop(columns='serial_number').reset_index(drop=True))
+    with pytest.raises(ValueError):
+        tr.retrain(out, tick_df, prof, 128, holdout_days=2, n_envs=1)
+    e = tr.retrain(out, more, prof, 128, holdout_days=2, n_envs=1, min_gain_bps=-1e9)
+    assert set(e['results']) == {'champion', 'challenger', 'random'}
+    log = json.load(open(os.path.join(out, 'retrain_log.json')))
+    assert len(log) == 1
+    if e['promoted']:
+        assert os.listdir(os.path.join(out, 'history'))
+    e2 = tr.retrain(out, more, prof, 128, holdout_days=2, n_envs=1, min_gain_bps=1e9)
+    assert not e2['promoted']
