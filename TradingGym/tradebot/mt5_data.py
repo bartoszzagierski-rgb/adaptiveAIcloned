@@ -116,8 +116,11 @@ def fetch_bars(symbol, timeframe, start, end, chunk_days=90):
     while cur < end:
         nxt = min(cur + timedelta(days=chunk_days), end)
         rates = mt5.copy_rates_range(symbol, tf, cur, nxt)
-        if rates is not None and len(rates):
+        n = 0 if rates is None else len(rates)
+        if n:
             parts.append(pd.DataFrame(rates))
+        log.info('%s %s: %s .. %s -> %d swiec%s', symbol, timeframe, cur.date(), nxt.date(), n,
+                 '' if n else ' (brak historii u brokera w tym okresie)')
         cur = nxt
     if not parts:
         raise RuntimeError('MT5 nie zwrocil swiec dla {}: {}'.format(symbol, mt5.last_error()))
