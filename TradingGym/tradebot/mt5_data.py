@@ -207,6 +207,16 @@ def split_days(df, test_frac=0.2):
             _finalize(df[d >= cut].drop(columns='serial_number')))
 
 
+def median_spread_bps(df, last_days=250):
+    """Mediana spreadu jako ulamek ceny (bps) z ostatnich `last_days` dni - aktualne warunki brokera."""
+    if 'spread' not in df:
+        return 0.0
+    days = sorted(df['datetime'].dt.date.unique())[-last_days:]
+    recent = df[df['datetime'].dt.date.isin(days)]
+    rel = (recent['spread'] / recent['price'])[recent['spread'] > 0]
+    return float(rel.median() * 1e4) if len(rel) else 0.0
+
+
 def median_spread(df):
     s = df['spread'][df['spread'] > 0] if 'spread' in df else pd.Series(dtype=float)
     return float(s.median()) if len(s) else 0.0

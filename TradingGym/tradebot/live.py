@@ -161,7 +161,7 @@ class LiveTrader:
         self.max_daily_loss = max_daily_loss
         self.max_daily_loss_pct, self.max_drawdown_pct = max_daily_loss_pct, max_drawdown_pct
         self.risk_capital, self.max_margin_use, self.on_new_day = risk_capital, max_margin_use, on_new_day
-        self.max_spread = max_spread if max_spread is not None else cfg.max_spread
+        self.max_spread = max_spread  # None -> z konfiguracji modelu (cfg.max_spread_at(cena))
         self.supervisor, self.poll_interval, self.magic = supervisor, poll_interval, magic
         self.close_on_exit, self.stop_file, self.log_path = close_on_exit, stop_file, log_path
         self.confirm_live, self.deviation = confirm_live, deviation
@@ -209,7 +209,7 @@ class LiveTrader:
         self.running = True
         log.info('Start: %s%s, konto %s (%s), %s, lot %.2f na jednostke, max pozycja %d, max spread %s, sesja %s-%s',
                  self.mode.upper(), ' DRY-RUN' if self.dry_run else '', acc.login, acc.server,
-                 self.cfg.symbol, self.volume, self.cfg.max_position, self.max_spread,
+                 self.cfg.symbol, self.volume, self.cfg.max_position, self.spread_limit(self.feed.window()[-1, 0]),
                  self.cfg.session_start or '-', self.cfg.flat_after or '-')
 
     def _norm_volume(self, v):
@@ -260,7 +260,10 @@ class LiveTrader:
             u = p.volume / self.volume
             units += sign * u
             unreal += (price - p.price_open) * sign * u
-        return units, unreal - abs(units) * self.cfg.fee
+        return units, unreal - abs(units) * self.cfg.fee_at(price)
+
+    def spread_limit(self, price):
+        return self.max_spread if self.max_spread is not None else self.cfg.max_spread_at(price)
 
     # ---------------- zlecenia ----------------
     def _send(self, order_type, volume, position=None, comment='tradebot'):
@@ -296,12 +299,13 @@ class LiveTrader:
             order = mt5.ORDER_TYPE_SELL if p.type == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_BUY
             self._send(order, p.volume, position=p.ticket, comment='tradebot close all')
 
-    def execute(self, action, units, spread):
+    def execute(self, action, units, spread, price=None):
         """Ta sama logika co TradingGym: kup = zamknij short albo dodaj long; sprzedaj odwrotnie."""
         mt5, maxp = self.mt5, self.cfg.max_position
         opening = (action == 1 and units >= -1e-9) or (action == 2 and units <= 1e-9)
-        if opening and self.max_spread is not None and spread > self.max_spread:
-            return 'skip: spread {:.6f} > {:.6f}'.format(spread, self.max_spread)
+        limit = self.spread_limit(price) if price else self.max_spread
+        if opening and limit is not None and spread > limit:
+            return 'skip: spread {:.6f} > {:.6f}'.format(spread, limit)
         if opening and not self.dry_run:
             order = mt5.ORDER_TYPE_BUY if action == 1 else mt5.ORDER_TYPE_SELL
             need, acc = self._margin(order, self.volume), mt5.account_info()
@@ -369,7 +373,7 @@ class LiveTrader:
             approved, why = self.supervisor.review(action, window, units, unreal)
         tick = self.mt5.symbol_info_tick(self.cfg.symbol)
         spread = tick.ask - tick.bid
-        result = self.execute(action, units, spread) if approved else 'vetoed by LLM'
+        result = self.execute(action, units, spread, price) if approved else 'vetoed by LLM'
         self.decisions += 1
         rec = {'time': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'mode': self.mode,
                'dry_run': self.dry_run, 'symbol': self.cfg.symbol, 'price': price, 'spread': spread,

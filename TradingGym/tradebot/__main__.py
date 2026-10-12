@@ -84,7 +84,7 @@ def cmd_train(args):
     from . import presets
     from .config import DEFAULT_FEATURES, AgentConfig
     from .hardware import detect
-    from .mt5_data import load_dataset, median_spread
+    from .mt5_data import load_dataset, median_spread, median_spread_bps
     from .train import train
     df = load_dataset(args.data)
     meta = _load_meta(args.data)
@@ -103,8 +103,14 @@ def cmd_train(args):
                       step_len=args.step_len or pre.get('step_len', 16),
                       max_position=args.max_position or pre.get('max_position', 3),
                       fee=float(fee), algo=args.algo.upper(), preset=preset,
-                      max_spread=spread * pre['max_spread_mult'] if 'max_spread_mult' in pre and spread else None,
                       session_start=pre.get('session_start'), flat_after=pre.get('flat_after'))
+    if pre and args.fee is None:  # presety: koszt i limit spreadu jako % ceny (aktualny spread brokera)
+        bps = median_spread_bps(df)
+        cfg.fee_bps = round(bps * pre.get('fee_mult', 1.0), 4)
+        cfg.max_spread_bps = round(bps * pre['max_spread_mult'], 4) if 'max_spread_mult' in pre else None
+        cfg.fee = cfg.fee_at(float(df['price'].iloc[-1]))
+    log.info('Dane: %d swiec/tickow, %d dni (%s .. %s)', len(df), df['datetime'].dt.date.nunique(),
+             df['datetime'].iloc[0].date(), df['datetime'].iloc[-1].date())
     args.timesteps = args.timesteps or pre.get('timesteps', 1_000_000)
     log.info('Sprzet: %s', profile.describe())
     log.info('Konfiguracja: %s', cfg)

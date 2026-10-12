@@ -268,7 +268,8 @@ def test_cli_xauusd_preset_pipeline(tmp_path, monkeypatch):
     main(['train', '--data', 'gold.csv', '--out', 'g', '--timesteps', '256', '--n-envs', '1', '--device', 'cpu'])
     c = AgentConfig.load('g')
     assert c.features == ['price', 'spread', 'volume', 'range'] and c.obs_len == 48 and c.step_len == 1
-    assert c.fee == pytest.approx(0.45) and c.max_spread == pytest.approx(0.9) and c.flat_after == '23:30'
+    assert c.fee_bps > 0 and c.max_spread_bps == pytest.approx(c.fee_bps * 2) and c.flat_after == '23:30'
+    assert c.fee_at(4000) == pytest.approx(c.fee_bps * 0.4)
     main(['live', '--fake-mt5', '--model', 'g', '--dry-run', '--max-iterations', '10', '--poll', '0'])
     mt5_data.use_module(None)
 

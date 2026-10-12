@@ -26,6 +26,17 @@ class AgentConfig:
     max_spread: float = None       # live: nie otwieraj pozycji przy wiekszym spreadzie (w cenie)
     session_start: str = None      # live: 'HH:MM' czasu serwera MT5 - przed ta godzina bot nie handluje
     flat_after: str = None         # live: 'HH:MM' czasu serwera - po tej godzinie zamyka pozycje (jak koniec dnia w treningu)
+    fee_bps: float = None          # koszt jako ulamek ceny (1 bps = 0.01%) - zamiast stalego `fee` przy dlugiej historii
+    max_spread_bps: float = None   # live: limit spreadu jako ulamek ceny
+
+    def fee_at(self, price):
+        """Koszt zamkniecia 1 jednostki przy danej cenie (w jednostkach ceny)."""
+        return self.fee_bps * 1e-4 * price if self.fee_bps else self.fee
+
+    def max_spread_at(self, price):
+        if self.max_spread_bps:
+            return self.max_spread_bps * 1e-4 * price
+        return self.max_spread
 
     def save(self, directory):
         os.makedirs(directory, exist_ok=True)

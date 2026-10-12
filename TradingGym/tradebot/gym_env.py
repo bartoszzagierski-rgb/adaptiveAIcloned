@@ -59,6 +59,8 @@ class TradingGymEnv(gym.Env):
         if seed is not None:
             np.random.seed(seed)  # TradingGym losuje dzien przez np.random
         self.raw = self.env.reset()
+        if self.cfg.fee_bps:  # koszt proporcjonalny do ceny danego dnia (zloto 2016: ~1200 USD, 2026: ~4200 USD)
+            self.env.fee = self.cfg.fee_at(float(self.env.price[0]))
         self._prev_fluc = 0.0
         return self._obs(), {}
 
@@ -126,4 +128,5 @@ def summarize(tr, cfg, name):
         'worst_day_bps': round(float(daily.min()) / mean_price * 1e4, 2),
         'positive_days': int((daily > 0).sum()),
         'fee_per_unit': cfg.fee,
+        'fee_bps': cfg.fee_bps,
     }

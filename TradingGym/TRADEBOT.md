@@ -123,18 +123,18 @@ Co ustawia preset (train i live odczytują go same z danych i modelu):
 
 | Ustawienie | Wartość | Dlaczego |
 |---|---|---|
-| dane | świece **M5**, 2 lata | ticków złota jest setki tysięcy dziennie i są zaszumione, a świece dają długą historię |
+| dane | świece **M5**, **10 lat** (albo tyle, ile ma broker) | ticków złota jest setki tysięcy dziennie i są zaszumione; 10 lat obejmuje różne okresy: spokojne lata, COVID, wojnę, rekordy cen |
 | cechy | cena, spread, wolumen, zakres świecy | zakres świecy (high−low) dobrze pokazuje zmienność złota |
 | okno / decyzja | 48 świec (4 h) / co świecę (5 min) | |
-| koszt `fee` | 1,5 × mediana spreadu | spread ze świec MT5 to minimum, a dochodzi poślizg |
-| `max_spread` | 3 × mediana spreadu | brak nowych pozycji przy newsach i rolloverze |
+| koszt `fee_bps` | 1,5 × mediana spreadu z ostatniego roku, **jako % ceny** | spread ze świec MT5 to minimum, a dochodzi poślizg; % ceny, bo złoto podrożało przez 10 lat ok. 3,5 raza (1200 → 4200 USD) i stały koszt w USD byłby zawyżony dla starych lat |
+| `max_spread_bps` | 3 × mediana spreadu (jako % ceny) | brak nowych pozycji przy newsach i rolloverze |
 | sesja | handel od **05:00**, zamknięcie pozycji po **23:30** czasu serwera | tak samo jak w treningu: dzień = epizod, pierwsze 4 h to tylko obserwacja, pozycja zamknięta przed przerwą (bez swapów) |
 | lot / limity | 0,01 lota na jednostkę, max 3 jednostki, 2% dziennie, 10% łącznie | zobacz „Ryzyko” niżej |
-| trening | 3 mln kroków | |
+| trening | 10 mln kroków | ok. 2600 dni × ok. 230 decyzji, czyli ok. 16 przejść przez całą historię; na T7 rzędu 1–2 godzin |
 
 Symbol jest wyszukiwany automatycznie, więc zadziała też u brokerów z nazwami `XAUUSDm`, `XAUUSD.pro` czy `GOLD`.
 
-**Ważne przed `fetch`:** w MT5 ustaw *Narzędzia → Opcje → Wykresy → Maks. liczba świec na wykresie* na **Unlimited**. Inaczej MT5 odda tylko ok. 100 tys. świec, czyli mniej niż rok M5. `doctor` to sprawdza.
+**Ważne przed `fetch`:** w MT5 ustaw *Narzędzia → Opcje → Wykresy → Maks. liczba świec na wykresie* na **Unlimited**. Inaczej MT5 odda tylko ok. 100 tys. świec, czyli mniej niż rok M5. `doctor` to sprawdza. 10 lat M5 to ok. 700 tys. świec. Brokerzy CFD często nie mają aż tak głębokiej historii M5: `fetch` pobierze wtedy maksimum dostępne i wypisze ostrzeżenie, od kiedy zaczynają się dane. Jeśli przy pierwszym pobraniu przyjdzie mniej danych, otwórz w MT5 wykres XAUUSD M5, przewiń go maksymalnie w lewo (klawisz Home), żeby terminal dociągnął historię z serwera, i uruchom `fetch` ponownie.
 
 ## Aktualizacja kodu bez pobierania ZIP: GitHub Desktop
 
