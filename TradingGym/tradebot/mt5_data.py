@@ -52,6 +52,25 @@ def connect():
     return mt5
 
 
+def resolve_symbol(symbol):
+    """Zwraca nazwe symbolu u brokera, np. XAUUSD -> XAUUSDm / XAUUSD.pro / GOLD."""
+    mt5 = get_mt5()
+    if mt5.symbol_select(symbol, True) and mt5.symbol_info(symbol) is not None:
+        return symbol
+    aliases = {'XAUUSD': ['GOLD'], 'XAGUSD': ['SILVER']}.get(symbol.upper(), [])
+    candidates = []
+    for pattern in [symbol] + aliases:
+        for s in mt5.symbols_get(group='*{}*'.format(pattern)) or ():
+            candidates.append(s.name)
+    candidates = sorted(set(candidates), key=len)
+    for name in candidates:
+        if mt5.symbol_select(name, True):
+            log.info('Symbol %s u tego brokera nazywa sie %s', symbol, name)
+            return name
+    raise RuntimeError('Symbol {} niedostepny w MT5 (podobne: {}). Podaj dokladna nazwe z okna "Obserwacja rynku".'
+                       .format(symbol, ', '.join(candidates) or 'brak'))
+
+
 def _select(mt5, symbol):
     if not mt5.symbol_select(symbol, True):
         raise RuntimeError('Symbol {} niedostepny w MT5: {}'.format(symbol, mt5.last_error()))
@@ -86,13 +105,28 @@ def fetch_ticks(symbol, start, end, chunk_days=1):
     return raw.drop_duplicates(subset=[c for c in ('time_msc', 'bid', 'ask', 'last') if c in raw.columns])
 
 
-def fetch_bars(symbol, timeframe, start, end):
+def fetch_bars(symbol, timeframe, start, end, chunk_days=90):
+    """Swiece w kawalkach po chunk_days. Uwaga: MT5 zwroci najwyzej tyle swiec, ile ustawiono w
+    Narzedzia > Opcje > Wykresy > "Maks. swiec na wykresie" - dla 2 lat M5 ustaw "Unlimited"."""
     mt5 = get_mt5()
     info = _select(mt5, symbol)
-    rates = mt5.copy_rates_range(symbol, timeframe_const(timeframe), _utc(start), _utc(end))
-    if rates is None or len(rates) == 0:
+    tf = timeframe_const(timeframe)
+    start, end = _utc(start), _utc(end)
+    parts, cur = [], start
+    while cur < end:
+        nxt = min(cur + timedelta(days=chunk_days), end)
+        rates = mt5.copy_rates_range(symbol, tf, cur, nxt)
+        if rates is not None and len(rates):
+            parts.append(pd.DataFrame(rates))
+        cur = nxt
+    if not parts:
         raise RuntimeError('MT5 nie zwrocil swiec dla {}: {}'.format(symbol, mt5.last_error()))
-    return pd.DataFrame(rates), info.point
+    raw = pd.concat(parts, ignore_index=True).drop_duplicates(subset='time')
+    first = pd.to_datetime(raw['time'].min(), unit='s')
+    if first > pd.Timestamp(start.replace(tzinfo=None)) + pd.Timedelta(days=7):
+        log.warning('Historia zaczyna sie dopiero %s (chciano %s). Zwieksz "Maks. swiec na wykresie" w MT5 '
+                    'na Unlimited i pobierz ponownie.', first, start.date())
+    return raw, info.point
 
 
 def timeframe_const(name):
@@ -134,7 +168,8 @@ def bars_to_gym(raw, point):
     vol = df['real_volume'] if 'real_volume' in df and (df['real_volume'] > 0).any() else df['tick_volume']
     out = pd.DataFrame({'datetime': pd.to_datetime(df['time'], unit='s'), 'price': close,
                         'open': df['open'].astype(float), 'high': df['high'].astype(float),
-                        'low': df['low'].astype(float), 'bid': close, 'ask': close + spread,
+                        'low': df['low'].astype(float), 'range': (df['high'] - df['low']).astype(float),
+                        'bid': close, 'ask': close + spread,
                         'spread': spread, 'volume': vol.astype(float)})
     return _finalize(out)
 

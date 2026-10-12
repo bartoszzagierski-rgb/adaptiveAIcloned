@@ -155,7 +155,8 @@ class LiveTrader:
             raise ValueError('mode musi byc demo albo live')
         self.cfg, self.policy, self.mt5 = cfg, policy, mt5
         self.mode, self.dry_run, self.lot = mode, dry_run, lot
-        self.max_daily_loss, self.max_spread = max_daily_loss, max_spread
+        self.max_daily_loss = max_daily_loss
+        self.max_spread = max_spread if max_spread is not None else cfg.max_spread
         self.supervisor, self.poll_interval, self.magic = supervisor, poll_interval, magic
         self.close_on_exit, self.stop_file, self.log_path = close_on_exit, stop_file, log_path
         self.confirm_live, self.deviation = confirm_live, deviation
@@ -194,9 +195,10 @@ class LiveTrader:
         self.day = None
         self._roll_day(acc)
         self.running = True
-        log.info('Start: %s%s, konto %s (%s), %s, lot %.2f na jednostke, max pozycja %d',
+        log.info('Start: %s%s, konto %s (%s), %s, lot %.2f na jednostke, max pozycja %d, max spread %s, sesja %s-%s',
                  self.mode.upper(), ' DRY-RUN' if self.dry_run else '', acc.login, acc.server,
-                 self.cfg.symbol, self.volume, self.cfg.max_position)
+                 self.cfg.symbol, self.volume, self.cfg.max_position, self.max_spread,
+                 self.cfg.session_start or '-', self.cfg.flat_after or '-')
 
     def _norm_volume(self, v):
         step = self.sym.volume_step
@@ -303,7 +305,10 @@ class LiveTrader:
         if not self.check_risk():
             self.running = False
             return None
-        if not self.feed.poll():
+        ready = self.feed.poll()
+        if not self.in_session():
+            return None
+        if not ready:
             return None
         window = self.feed.window()
         price = float(window[-1, 0])
@@ -325,6 +330,23 @@ class LiveTrader:
         if action != 0:
             log.info('Decyzja: %s (pozycja %.2f) -> %s %s', rec['action'], units, result, why)
         return rec
+
+    def server_time(self):
+        """Godzina 'HH:MM' czasu serwera MT5 (czasy tickow w MT5 sa w strefie serwera)."""
+        tick = self.mt5.symbol_info_tick(self.cfg.symbol)
+        return datetime.fromtimestamp(tick.time, tz=timezone.utc).strftime('%H:%M')
+
+    def in_session(self):
+        """Odwzorowuje dzien z treningu: przed session_start nie handluje, po flat_after zamyka pozycje."""
+        if not (self.cfg.session_start or self.cfg.flat_after):
+            return True
+        hm = self.server_time()
+        if self.cfg.flat_after and hm >= self.cfg.flat_after:
+            if self._positions():
+                log.info('Koniec sesji (%s >= %s czasu serwera) - zamykam pozycje bota.', hm, self.cfg.flat_after)
+                self.close_all()
+            return False
+        return not (self.cfg.session_start and hm < self.cfg.session_start)
 
     def _log(self, rec):
         if not self.log_path:

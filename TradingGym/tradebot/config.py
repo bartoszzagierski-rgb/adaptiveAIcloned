@@ -22,6 +22,10 @@ class AgentConfig:
     max_position: int = 3          # max liczba jednostek (1 jednostka = --lot lotow na zywo)
     fee: float = 0.0               # koszt zamkniecia 1 jednostki w jednostkach ceny (spread + prowizja)
     algo: str = 'PPO'
+    preset: str = ''
+    max_spread: float = None       # live: nie otwieraj pozycji przy wiekszym spreadzie (w cenie)
+    session_start: str = None      # live: 'HH:MM' czasu serwera MT5 - przed ta godzina bot nie handluje
+    flat_after: str = None         # live: 'HH:MM' czasu serwera - po tej godzinie zamyka pozycje (jak koniec dnia w treningu)
 
     def save(self, directory):
         os.makedirs(directory, exist_ok=True)

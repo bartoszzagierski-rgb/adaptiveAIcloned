@@ -53,7 +53,9 @@ class FakeMT5:
         self.orders = []
         self._ticket = 1000
         self.balance = 10000.0
-        self.point = 0.00001
+        self.point = 0.01 if base_price > 100 else 0.00001
+        self.scale = base_price / 1.1
+        self.digits = 2 if base_price > 100 else 5
 
     # --- czas / ceny ---
     def now(self):
@@ -69,8 +71,8 @@ class FakeMT5:
         out = np.empty(len(idx))
         for b in np.unique(block):
             sel = block == b
-            steps = np.random.default_rng((self.seed, int(b))).normal(0, 2e-5, 4096).cumsum()
-            offset = np.random.default_rng((self.seed, int(b), 7)).normal(0, 1e-4)
+            steps = np.random.default_rng((self.seed, int(b))).normal(0, 2e-5 * self.scale, 4096).cumsum()
+            offset = np.random.default_rng((self.seed, int(b), 7)).normal(0, 1e-4 * self.scale)
             out[sel] = self.base * (1 + 0.002 * np.sin(idx[sel] / 50000.0)) + steps[pos[sel]] + offset
         return out
 
@@ -81,12 +83,12 @@ class FakeMT5:
             return np.zeros(0, dtype=TICK_DTYPE)
         msc = np.arange(first, last + 1, dtype=np.int64) * self.tick_ms
         mid = self._prices(msc)
-        spread = 10 * self.point
+        spread = (30 if self.point >= 0.01 else 10) * self.point
         arr = np.zeros(len(msc), dtype=TICK_DTYPE)
         arr['time_msc'] = msc
         arr['time'] = msc // 1000
-        arr['bid'] = np.round(mid - spread / 2, 5)
-        arr['ask'] = np.round(mid + spread / 2, 5)
+        arr['bid'] = np.round(mid - spread / 2, self.digits)
+        arr['ask'] = np.round(mid + spread / 2, self.digits)
         arr['flags'] = 6
         return arr
 
@@ -108,11 +110,17 @@ class FakeMT5:
     def terminal_info(self):
         return SimpleNamespace(trade_allowed=True, connected=True)
 
+    symbols = ('EURUSD', 'XAUUSDm', 'GBPUSD')
+
     def symbol_select(self, symbol, enable=True):
-        return True
+        return symbol in self.symbols
+
+    def symbols_get(self, group='*'):
+        pat = group.strip('*').upper()
+        return tuple(SimpleNamespace(name=s) for s in self.symbols if pat in s.upper())
 
     def symbol_info(self, symbol):
-        return SimpleNamespace(name=symbol, point=self.point, digits=5, volume_min=0.01, volume_max=100.0,
+        return SimpleNamespace(name=symbol, point=self.point, digits=self.digits, volume_min=0.01, volume_max=100.0,
                                volume_step=0.01, trade_contract_size=100000.0, filling_mode=1, visible=True)
 
     def symbol_info_tick(self, symbol):
@@ -136,7 +144,7 @@ class FakeMT5:
             if not len(t):
                 continue
             mid = (t['bid'] + t['ask']) / 2
-            rows.append((b * sec, mid[0], mid.max(), mid.min(), mid[-1], len(t), 10, 0))
+            rows.append((b * sec, mid[0], mid.max(), mid.min(), mid[-1], len(t), 30 if self.point >= 0.01 else 10, 0))
         return np.array(rows, dtype=RATE_DTYPE)
 
     def copy_rates_range(self, symbol, timeframe, date_from, date_to):
@@ -154,7 +162,7 @@ class FakeMT5:
         tick = self.symbol_info_tick(p.symbol)
         price = tick.bid if p.type == POSITION_TYPE_BUY else tick.ask
         sign = 1 if p.type == POSITION_TYPE_BUY else -1
-        return (price - p.price_open) * sign * p.volume * 100000.0
+        return (price - p.price_open) * sign * p.volume * (100.0 if self.point >= 0.01 else 100000.0)
 
     def order_send(self, request):
         self.orders.append(dict(request))
@@ -182,6 +190,7 @@ class FakeMT5:
                                price=price, volume=vol)
 
 
-def default_fake():
+def default_fake(symbol='EURUSD'):
     """Symulator z 'teraz' = poniedzialek 12:00 UTC (stabilne dane do testow i demo)."""
-    return FakeMT5(now=datetime(2024, 3, 4, 12, 0, tzinfo=timezone.utc).timestamp())
+    base = 2400.0 if 'XAU' in symbol.upper() or 'GOLD' in symbol.upper() else 1.1
+    return FakeMT5(base_price=base, now=datetime(2024, 3, 4, 12, 0, tzinfo=timezone.utc).timestamp())

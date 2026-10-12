@@ -236,3 +236,38 @@ def test_cli_fake_pipeline(tmp_path, monkeypatch):
     main(['live', '--fake-mt5', '--model', 'm', '--dry-run', '--max-iterations', '20', '--poll', '0'])
     assert os.path.exists('live_trades.csv')
     mt5_data.use_module(None)
+
+
+def test_resolve_symbol_broker_suffix(fake):
+    assert mt5_data.resolve_symbol('EURUSD') == 'EURUSD'
+    assert mt5_data.resolve_symbol('XAUUSD') == 'XAUUSDm'
+    with pytest.raises(RuntimeError, match='niedostepny'):
+        mt5_data.resolve_symbol('BTCXYZ')
+
+
+def test_session_flat_and_start(fake, tmp_path):
+    c = cfg(session_start='13:00', flat_after='12:30')
+    t = LiveTrader(c, AlwaysBuy(), fake, log_path=None, stop_file=None)
+    t.start()
+    assert not t.in_session()  # 12:00 < 13:00
+    c.session_start = '10:00'
+    c.flat_after = '23:00'
+    recs = _steps(fake, t, 4)
+    assert recs and t.position_state(1.1)[0] > 0
+    c.flat_after = '11:00'  # po godzinie zamkniecia -> zamyka pozycje i nie handluje
+    assert t.iteration() is None and t.position_state(1.1)[0] == 0
+
+
+def test_cli_xauusd_preset_pipeline(tmp_path, monkeypatch):
+    from tradebot.__main__ import main
+    from tradebot.config import AgentConfig
+    monkeypatch.chdir(tmp_path)
+    main(['fetch', '--fake-mt5', '--preset', 'xauusd', '--days', '4', '--out', 'gold.csv'])
+    meta = json.load(open('gold.csv.meta.json'))
+    assert meta['symbol'] == 'XAUUSDm' and meta['source'] == 'bars' and meta['timeframe'] == 'M5'
+    main(['train', '--data', 'gold.csv', '--out', 'g', '--timesteps', '256', '--n-envs', '1', '--device', 'cpu'])
+    c = AgentConfig.load('g')
+    assert c.features == ['price', 'spread', 'volume', 'range'] and c.obs_len == 48 and c.step_len == 1
+    assert c.fee == pytest.approx(0.45) and c.max_spread == pytest.approx(0.9) and c.flat_after == '23:30'
+    main(['live', '--fake-mt5', '--model', 'g', '--dry-run', '--max-iterations', '10', '--poll', '0'])
+    mt5_data.use_module(None)

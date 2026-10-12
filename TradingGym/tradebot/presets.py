@@ -1,0 +1,34 @@
+"""Gotowe ustawienia dla instrumentow. Uzycie: python -m tradebot fetch --preset xauusd ...
+
+XAUUSD (zloto):
+  * swiece M5 zamiast tickow - lata historii, mniej szumu (zloto ma setki tysiecy tickow dziennie),
+  * okno 48 swiec = 4 h kontekstu, decyzja co swiece (5 min),
+  * cechy: cena, spread, wolumen, zakres swiecy (high-low),
+  * koszt = 1.5 x mediana spreadu (spread swiecy w MT5 to minimum z tej swiecy + poslizg),
+  * live: nie otwiera pozycji gdy spread > 3 x mediana (newsy, rollover),
+  * sesja: zloto ma przerwe ok. polnocy czasu serwera. W treningu kazdy dzien to osobny epizod, pierwsze
+    48 swiec (4 h od otwarcia ok. 01:00) to tylko obserwacja, a pozycja jest zamykana na koniec dnia.
+    Na zywo odwzorowujemy to samo: handel od 05:00, zamkniecie pozycji po 23:30 (czas serwera MT5).
+"""
+
+PRESETS = {
+    'xauusd': {
+        'symbol': 'XAUUSD',
+        'source': 'bars', 'timeframe': 'M5', 'days': 730,
+        'features': ['price', 'spread', 'volume', 'range'],
+        'obs_len': 48, 'step_len': 1, 'max_position': 3,
+        'fee_mult': 1.5, 'max_spread_mult': 3.0,
+        'session_start': '05:00', 'flat_after': '23:30',
+        'timesteps': 3_000_000,
+        'lot': 0.01, 'max_daily_loss': 50.0,
+    },
+}
+
+
+def get(name):
+    if not name:
+        return {}
+    try:
+        return PRESETS[name.lower()]
+    except KeyError:
+        raise SystemExit('Nieznany preset {} (dostepne: {})'.format(name, ', '.join(PRESETS)))
