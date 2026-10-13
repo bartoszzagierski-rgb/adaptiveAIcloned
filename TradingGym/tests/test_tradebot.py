@@ -404,3 +404,15 @@ def test_batched_subproc_vec_env(tick_df):
         assert len(vec.get_attr('cfg')) == 6
     finally:
         vec.close()
+
+
+def test_vec_env_close_after_workers_died(tick_df):
+    from tradebot.train import _safe_close, make_vec_env
+    vec = make_vec_env(tick_df, cfg(), n_workers=2, envs_per_worker=2)
+    vec.reset()
+    vec.step_async(np.zeros(4, dtype=int))
+    for p in vec.venv.processes:  # symulacja Ctrl+C na Windows: pracownicy gina pierwsi
+        p.terminate()
+        p.join()
+    _safe_close(vec)  # nie moze rzucic wyjatku
+    assert vec.venv.closed

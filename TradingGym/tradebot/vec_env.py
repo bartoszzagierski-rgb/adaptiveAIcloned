@@ -95,15 +95,21 @@ class BatchedSubprocVecEnv(VecEnv):
         return obs
 
     def close(self):
+        """Odporne na Ctrl+C: na Windows przerwanie trafia tez do procesow-pracownikow, ktore konca sie same -
+        wtedy polaczenie jest juz zerwane i tylko sprzatamy."""
         if self.closed:
             return
-        if self.waiting:
-            for r in self.remotes:
-                r.recv()
         for r in self.remotes:
-            r.send(('close', None))
+            try:
+                if self.waiting:
+                    r.recv()
+                r.send(('close', None))
+            except (EOFError, BrokenPipeError, ConnectionResetError, OSError):
+                pass
         for p in self.processes:
-            p.join()
+            p.join(timeout=10)
+            if p.is_alive():
+                p.terminate()
         self.closed = True
 
     def _gather(self, cmd, data, indices):

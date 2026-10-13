@@ -34,6 +34,13 @@ def make_vec_env(df, cfg, n_workers, envs_per_worker=1, seed=0):
     return VecMonitor(BatchedSubprocVecEnv(fns, envs_per_worker))
 
 
+def _safe_close(vec):
+    try:
+        vec.close()
+    except (EOFError, BrokenPipeError, ConnectionResetError, OSError, KeyboardInterrupt):
+        pass  # procesy juz zakonczone (np. Ctrl+C na Windows) - nie blokuj egzaminu
+
+
 def _algo_cls(name):
     from stable_baselines3 import DQN, PPO
     return {'PPO': PPO, 'DQN': DQN}[name.upper()]
@@ -148,7 +155,7 @@ def train(df, cfg, timesteps, out_dir, profile, test_months=6, val_months=6, see
             stopper.stop_reason = 'przerwano Ctrl+C'
             log.warning('Przerwano - przechodze do egzaminu z najlepszym dotad modelem.')
     finally:
-        vec.close()
+        _safe_close(vec)
     best_path = os.path.join(out_dir, 'model.zip')
     if not os.path.exists(best_path):  # zadnego sprawdzenia (bardzo krotki trening) -> ostatni model
         model.save(best_path)
@@ -226,7 +233,7 @@ def retrain(model_dir, df, profile, timesteps, holdout_days=10, n_envs=None, see
         challenger = _algo_cls(cfg.algo).load(os.path.join(model_dir, 'model.zip'), env=vec, device=profile.device)
         challenger.learn(total_timesteps=timesteps, reset_num_timesteps=False, progress_bar=False)
     finally:
-        vec.close()
+        _safe_close(vec)
     res = {
         'champion': run_backtest(test_df, cfg, RLPolicy(champion))[0],
         'challenger': run_backtest(test_df, cfg, RLPolicy(challenger))[0],
