@@ -3,7 +3,7 @@
 XAUUSD (zloto):
   * swiece M5 zamiast tickow - lata historii, mniej szumu (zloto ma setki tysiecy tickow dziennie),
   * okno 48 swiec = 4 h kontekstu, decyzja co swiece (5 min),
-  * cechy: cena, spread, wolumen, zakres swiecy (high-low),
+  * cechy: cena, spread, wolumen, zakres swiecy (high-low), pora dnia i dzien tygodnia (Londyn, NY, dane 14:30),
   * historia: 10 lat (albo maksimum dostepne u brokera),
   * koszt = 1.5 x mediana spreadu z ostatniego roku, liczona jako % ceny - przez 10 lat cena zlota wzrosla
     ok. 3,5 raza, wiec staly koszt w USD bylby za duzy dla starych lat,
@@ -17,7 +17,7 @@ PRESETS = {
     'xauusd': {
         'symbol': 'XAUUSD',
         'source': 'bars', 'timeframe': 'M5', 'days': 3650,  # 10 lat albo tyle, ile ma broker
-        'features': ['price', 'spread', 'volume', 'range'],
+        'features': ['price', 'spread', 'volume', 'range', 'hour_sin', 'hour_cos', 'dow_sin', 'dow_cos'],
         'obs_len': 48, 'step_len': 1, 'max_position': 3,
         'fee_mult': 1.5, 'max_spread_mult': 3.0,
         'session_start': '05:00', 'flat_after': '23:30',

@@ -52,7 +52,8 @@ class TradingGymEnv(gym.Env):
         return float(self.raw[-1, self.n_feat + _FLUC])
 
     def _obs(self):
-        return make_obs(self.window, self.position, self.cfg.max_position, self.unrealized)
+        return make_obs(self.window, self.position, self.cfg.max_position, self.unrealized,
+                        self.cfg.features)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)

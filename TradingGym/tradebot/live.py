@@ -366,7 +366,7 @@ class LiveTrader:
         window = self.feed.window()
         price = float(window[-1, 0])
         units, unreal = self.position_state(price)
-        obs = make_obs(window, units, self.cfg.max_position, unreal)
+        obs = make_obs(window, units, self.cfg.max_position, unreal, self.cfg.features)
         action = self.policy.act(obs, window, units, unreal)
         approved, why = True, ''
         if action != 0 and self.supervisor is not None:

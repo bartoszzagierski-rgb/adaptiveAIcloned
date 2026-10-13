@@ -267,7 +267,8 @@ def test_cli_xauusd_preset_pipeline(tmp_path, monkeypatch):
     assert meta['symbol'] == 'XAUUSDm' and meta['source'] == 'bars' and meta['timeframe'] == 'M5'
     main(['train', '--data', 'gold.csv', '--out', 'g', '--timesteps', '256', '--n-envs', '1', '--device', 'cpu'])
     c = AgentConfig.load('g')
-    assert c.features == ['price', 'spread', 'volume', 'range'] and c.obs_len == 48 and c.step_len == 1
+    assert c.features[:4] == ['price', 'spread', 'volume', 'range'] and 'hour_sin' in c.features
+    assert c.obs_len == 48 and c.step_len == 1
     assert c.fee_bps > 0 and c.max_spread_bps == pytest.approx(c.fee_bps * 2) and c.flat_after == '23:30'
     assert c.fee_at(4000) == pytest.approx(c.fee_bps * 0.4)
     main(['live', '--fake-mt5', '--model', 'g', '--dry-run', '--max-iterations', '10', '--poll', '0'])
@@ -348,3 +349,26 @@ def test_exam_verdict():
     assert exam_verdict(dict(base, trades=500, pnl_bps=300, sharpe=1.2), dict(trades=900, pnl_bps=-800))[0] == 'ZDAL'
     assert exam_verdict(dict(base, trades=5, pnl_bps=0, sharpe=0), dict(trades=900, pnl_bps=-800))[0] == 'NIE ZDAL'
     assert exam_verdict(dict(base, trades=500, pnl_bps=-50, sharpe=-0.1), dict(trades=900, pnl_bps=-800))[0] == 'SLABO'
+
+
+def test_time_features_raw_in_obs():
+    from tradebot.mt5_data import _finalize
+    t = pd.date_range('2026-01-05 14:30', periods=4, freq='5min')
+    df = _finalize(pd.DataFrame({'datetime': t, 'price': 1.0, 'spread': 0.1, 'volume': 1.0}))
+    assert df['hour_sin'].between(-1, 1).all() and df['dow_cos'].iloc[0] == pytest.approx(1.0)  # poniedzialek
+    feats = ['price', 'hour_sin']
+    o = make_obs(df[feats].to_numpy(), 0, 3, 0.0, feats)
+    assert o[1] == pytest.approx(df['hour_sin'].iloc[0], abs=1e-6)  # bez normalizacji
+
+
+def test_cli_sweep_picks_by_validation(tmp_path, monkeypatch):
+    from tradebot.__main__ import main
+    monkeypatch.chdir(tmp_path)
+    main(['fetch', '--fake-mt5', '--preset', 'xauusd', '--days', '4', '--out', 'gold.csv'])
+    main(['sweep', '--data', 'gold.csv', '--out', 'sw', '--step-len', '1', '4', '--timesteps', '256',
+          '--n-envs', '1', '--device', 'cpu'])
+    summ = json.load(open('sw/sweep_summary.json'))
+    assert [v['step_len'] for v in summ['variants']] == [1, 4]
+    assert summ['best']['val_sharpe'] == max(v['val_sharpe'] for v in summ['variants'])
+    assert os.path.exists('sw/best/model.zip')
+    mt5_data.use_module(None)

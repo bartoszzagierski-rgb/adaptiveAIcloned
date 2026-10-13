@@ -163,6 +163,15 @@ Wynik zapisuje się w `models\xauusd\backtest.json`: `exam`, `rl_test` (egzamin)
 
 Trening można przerwać w dowolnej chwili przez **Ctrl+C**. Egzamin przejdzie wtedy od razu z najlepszym dotąd modelem. Limity zmienisz parametrami `--patience`, `--eval-every`, `--max-hours`, `--timesteps` i `--test-months`.
 
+## Porównanie wariantów: `sweep`
+
+```bat
+python -m tradebot sweep --data data\xauusd_m5.h5 --out models\xauusd_sweep --max-hours 3
+```
+Trenuje po kolei warianty z decyzją co 5, 15, 30 i 60 minut (`--step-len 1 3 6 12`), każdy najwyżej 3 godziny. Wariant wybierany jest **tylko według walidacji**, więc egzamin pozostaje uczciwym sprawdzianem. Na końcu wypisuje tabelę ze wszystkimi wariantami i kopiuje wybrany do `models\xauusd_sweep\best`. Ten katalog podajesz potem w `live` i `retrain`.
+
+Agent widzi też porę dnia i dzień tygodnia (cechy `hour_sin`, `hour_cos`, `dow_sin`, `dow_cos`, czas serwera MT5). Na złocie ma to znaczenie: otwarcie Londynu, otwarcie Nowego Jorku, dane makro o 14:30.
+
 ## Uczenie ciągłe: douczanie co tydzień (`retrain`)
 
 Agent **nie uczy się w trakcie handlu**. Na żywo działa na zamrożonym modelu, a uczy się osobno, na nowych danych, metodą champion/challenger:

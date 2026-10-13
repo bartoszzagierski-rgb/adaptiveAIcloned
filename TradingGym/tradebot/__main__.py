@@ -7,6 +7,7 @@
   llm-check - sprawdz czy Ollama dziala i ma model
   review    - LLM ocenia wyniki backtestu i proponuje zmiany
   live      - handel na koncie demo albo realnym (MT5)
+  sweep     - trenuj kilka wariantow (co 5/15/30/60 min) i wybierz najlepszy wg walidacji
   retrain   - douczanie na swiezych danych z MT5 (champion/challenger), np. co weekend
   doctor    - sprawdz wersje: Python, pakiety, GPU/CUDA, Ollama + model, MT5
 
@@ -116,10 +117,52 @@ def cmd_train(args):
     log.info('Konfiguracja: %s', cfg)
     _, results = train(df, cfg, args.timesteps, args.out, profile, test_months=args.test_months,
                        val_months=args.val_months, seed=args.seed, n_envs=args.n_envs,
-                       eval_every=args.eval_every or pre.get('eval_every'),
+                       # rzadsze decyzje = mniej krokow na dzien -> sprawdzaj czesciej (w krokach)
+                       eval_every=args.eval_every or (max(200_000, pre['eval_every'] * pre.get('step_len', 1)
+                                                          // cfg.step_len) if 'eval_every' in pre else None),
                        patience=args.patience or pre.get('patience', 10),
                        max_hours=args.max_hours or pre.get('max_hours'))
     print(json.dumps(results, indent=2))
+
+
+def cmd_sweep(args):
+    """Trenuje po kolei warianty --step-len. Wybor TYLKO wg walidacji (egzamin zostaje nietkniety),
+    egzamin pokazany dla kazdego wariantu informacyjnie."""
+    import copy
+    import shutil
+    rows = []
+    for k in args.step_len:
+        sub = copy.copy(args)
+        sub.step_len, sub.out = k, os.path.join(args.out, 'step{}'.format(k))
+        log.info('===== wariant step_len=%d (%s) =====', k, sub.out)
+        try:
+            cmd_train(sub)
+        except KeyboardInterrupt:
+            log.warning('Przerwano sweep na wariancie %d', k)
+            break
+        with open(os.path.join(sub.out, 'backtest.json'), encoding='utf-8') as f:
+            r = json.load(f)
+        rows.append({'step_len': k, 'dir': sub.out, 'val_sharpe': r['rl_val']['sharpe'],
+                     'val_bps': r['rl_val']['pnl_bps'], 'exam_bps': r['rl_test']['pnl_bps'],
+                     'exam_sharpe': r['rl_test']['sharpe'], 'exam_trades': r['rl_test']['trades'],
+                     'verdict': r['exam']['verdict'], 'hours': r.get('training', {}).get('hours')})
+    if not rows:
+        return
+    best = max(rows, key=lambda r: r['val_sharpe'])
+    print('\n{:>8} {:>10} {:>10} {:>11} {:>11} {:>8} {:>10}  {}'.format(
+        'step_len', 'val_sharpe', 'val_bps', 'exam_sharpe', 'exam_bps', 'trades', 'werdykt', 'czas h'))
+    for r in rows:
+        print('{:>8} {:>10.2f} {:>+10.0f} {:>11.2f} {:>+11.0f} {:>8} {:>10}  {}{}'.format(
+            r['step_len'], r['val_sharpe'], r['val_bps'], r['exam_sharpe'], r['exam_bps'], r['exam_trades'],
+            r['verdict'], r['hours'], '   <- wybrany (walidacja)' if r is best else ''))
+    final = os.path.join(args.out, 'best')
+    if os.path.exists(final):
+        shutil.rmtree(final)
+    shutil.copytree(best['dir'], final, ignore=shutil.ignore_patterns('checkpoints'))
+    with open(os.path.join(args.out, 'sweep_summary.json'), 'w', encoding='utf-8') as f:
+        json.dump({'chosen_by': 'val_sharpe', 'best': best, 'variants': rows}, f, indent=2)
+    print('\nWybrany wariant step_len={} skopiowany do {}. Werdykt egzaminu: {}.'.format(
+        best['step_len'], final, best['verdict']))
 
 
 def cmd_backtest(args):
@@ -291,27 +334,39 @@ def main(argv=None):
     sp.add_argument('--fake-mt5', action='store_true')
     sp.set_defaults(func=cmd_fetch)
 
+    def train_args(sp, sweep=False):
+        sp.add_argument('--data', required=True)
+        sp.add_argument('--out', required=True, help='katalog modelu, np. models/xauusd' +
+                        (' (warianty w podkatalogach step<N>)' if sweep else ''))
+        sp.add_argument('--symbol')
+        sp.add_argument('--algo', choices=['PPO', 'DQN', 'ppo', 'dqn'], default='PPO')
+        sp.add_argument('--preset', help='domyslnie z pliku .meta.json danych')
+        sp.add_argument('--timesteps', type=int, help='MAKSYMALNA liczba krokow (xauusd: 300M); zwykle konczy sie '
+                        'wczesniej, gdy model przestaje sie poprawiac')
+        sp.add_argument('--eval-every', type=int, help='co ile krokow sprawdzac na walidacji (xauusd: 2M)')
+        sp.add_argument('--patience', type=int, help='ile sprawdzen bez poprawy konczy nauke (xauusd: 10)')
+        sp.add_argument('--max-hours', type=float, help='limit czasu treningu w godzinach (xauusd: 72)')
+        sp.add_argument('--test-months', type=int, default=6, help='egzamin na ostatnich N miesiacach')
+        sp.add_argument('--val-months', type=int, default=6, help='walidacja: N miesiecy przed egzaminem')
+        sp.add_argument('--obs-len', type=int, help='domyslnie 64 (xauusd: 48)')
+        if sweep:
+            sp.add_argument('--step-len', type=int, nargs='+', default=[1, 3, 6, 12],
+                            help='warianty: co ile swiec decyzja (domyslnie 1 3 6 12 = co 5/15/30/60 min na M5)')
+        else:
+            sp.add_argument('--step-len', type=int, help='domyslnie 16 (xauusd: 1)')
+        sp.add_argument('--max-position', type=int, help='domyslnie 3')
+        sp.add_argument('--fee', type=float, help='koszt zamkniecia 1 jednostki w cenie (domyslnie mediana spreadu)')
+        sp.add_argument('--n-envs', type=int, help='domyslnie liczba watkow CPU - 2')
+        sp.add_argument('--device', choices=['cuda', 'cpu'], help='domyslnie cuda jesli dostepna')
+        sp.add_argument('--seed', type=int, default=0)
+
     sp = sub.add_parser('train')
-    sp.add_argument('--data', required=True)
-    sp.add_argument('--out', required=True, help='katalog modelu, np. models/eurusd')
-    sp.add_argument('--symbol')
-    sp.add_argument('--algo', choices=['PPO', 'DQN', 'ppo', 'dqn'], default='PPO')
-    sp.add_argument('--preset', help='domyslnie z pliku .meta.json danych')
-    sp.add_argument('--timesteps', type=int, help='MAKSYMALNA liczba krokow (xauusd: 300M); zwykle konczy sie '
-                    'wczesniej, gdy model przestaje sie poprawiac')
-    sp.add_argument('--eval-every', type=int, help='co ile krokow sprawdzac na walidacji (xauusd: 2M)')
-    sp.add_argument('--patience', type=int, help='ile sprawdzen bez poprawy konczy nauke (xauusd: 10)')
-    sp.add_argument('--max-hours', type=float, help='limit czasu treningu w godzinach (xauusd: 72)')
-    sp.add_argument('--test-months', type=int, default=6, help='egzamin na ostatnich N miesiacach')
-    sp.add_argument('--val-months', type=int, default=6, help='walidacja: N miesiecy przed egzaminem')
-    sp.add_argument('--obs-len', type=int, help='domyslnie 64 (xauusd: 48)')
-    sp.add_argument('--step-len', type=int, help='domyslnie 16 (xauusd: 1)')
-    sp.add_argument('--max-position', type=int, help='domyslnie 3')
-    sp.add_argument('--fee', type=float, help='koszt zamkniecia 1 jednostki w cenie (domyslnie mediana spreadu)')
-    sp.add_argument('--n-envs', type=int, help='domyslnie liczba watkow CPU - 2')
-    sp.add_argument('--device', choices=['cuda', 'cpu'], help='domyslnie cuda jesli dostepna')
-    sp.add_argument('--seed', type=int, default=0)
+    train_args(sp)
     sp.set_defaults(func=cmd_train)
+
+    sp = sub.add_parser('sweep', help='trenuj kilka wariantow --step-len, wybierz najlepszy wg walidacji')
+    train_args(sp, sweep=True)
+    sp.set_defaults(func=cmd_sweep)
 
     sp = sub.add_parser('backtest')
     sp.add_argument('--model', required=True)

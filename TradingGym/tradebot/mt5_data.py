@@ -181,6 +181,12 @@ def _finalize(out):
     """Sortuje, ustawia indeks 0..N i serial_number (0 = pierwszy rekord dnia) - wymagania TradingGym."""
     out = out.sort_values('datetime', kind='stable').reset_index(drop=True)
     out['serial_number'] = out.groupby(out['datetime'].dt.date).cumcount()
+    # pora dnia i dzien tygodnia (czas serwera MT5) jako sin/cos - 23:55 jest blisko 00:00
+    t = out['datetime']
+    hour = (t.dt.hour + t.dt.minute / 60.0) / 24.0 * 2 * np.pi
+    dow = t.dt.dayofweek / 7.0 * 2 * np.pi
+    out['hour_sin'], out['hour_cos'] = np.sin(hour), np.cos(hour)
+    out['dow_sin'], out['dow_cos'] = np.sin(dow), np.cos(dow)
     return out
 
 
@@ -191,7 +197,7 @@ def drop_short_days(df, min_len):
     kept = df[sizes >= min_len]
     dropped = day.nunique() - kept['datetime'].dt.date.nunique()
     if dropped:
-        log.info('Pominieto %d dni z mniej niz %d rekordami', dropped, min_len)
+        log.debug('Pominieto %d dni z mniej niz %d rekordami', dropped, min_len)
     if kept.empty:
         raise ValueError('Zaden dzien nie ma >= {} rekordow. Zmniejsz obs_len/step_len albo pobierz wiecej danych.'
                          .format(min_len))
