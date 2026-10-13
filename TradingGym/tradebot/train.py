@@ -16,9 +16,22 @@ log = logging.getLogger(__name__)
 
 
 def _make_env(df, cfg, seed):
-    env = TradingGymEnv(df, cfg)
+    env = TradingGymEnv(df, cfg, with_transactions=False, clean=True)
     env.reset(seed=seed)
     return env
+
+
+def make_vec_env(df, cfg, n_workers, envs_per_worker=1, seed=0):
+    """n_workers procesow x envs_per_worker srodowisk w kazdym (BatchedSubprocVecEnv)."""
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
+    from .mt5_data import drop_short_days
+    from .vec_env import BatchedSubprocVecEnv
+    df = drop_short_days(df, cfg.obs_len + 2 * cfg.step_len + 1)  # raz, wspolne dla wszystkich srodowisk
+    total = n_workers * envs_per_worker
+    fns = [partial(_make_env, df, cfg, seed + i) for i in range(total)]
+    if n_workers == 1 and envs_per_worker == 1:
+        return VecMonitor(DummyVecEnv(fns))
+    return VecMonitor(BatchedSubprocVecEnv(fns, envs_per_worker))
 
 
 def _algo_cls(name):
@@ -32,7 +45,9 @@ def build_model(cfg, vec_env, profile, timesteps, seed=0, verbose=1):
     common = dict(policy='MlpPolicy', env=vec_env, seed=seed, verbose=verbose, device=profile.device,
                   policy_kwargs=policy_kwargs)
     if cfg.algo.upper() == 'PPO':
-        n_steps = int(min(1024, max(64, timesteps // n_envs)))
+        # runda ~64k krokow niezaleznie od liczby srodowisk (potega 2 -> rowne porcje)
+        target = max(64, min(1024, 65536 // n_envs, timesteps // n_envs))
+        n_steps = int(2 ** int(np.log2(target)))
         rollout = n_steps * n_envs
         # batch = dzielnik rozmiaru rundy (bez obcietej ostatniej porcji), najblizszy profilowi
         batch = max((b for b in range(1, min(profile.batch_size, rollout) + 1) if rollout % b == 0))
@@ -98,33 +113,33 @@ class LearnUntilNoProgress:
 
 
 def train(df, cfg, timesteps, out_dir, profile, test_months=6, val_months=6, seed=0, n_envs=None,
-          checkpoint_every=1_000_000, eval_every=None, patience=10, max_hours=None):
+          checkpoint_every=1_000_000, eval_every=None, patience=10, max_hours=None, envs_per_worker=None):
     """Trening do skutku: uczy sie, dopoki wynik na walidacji rosnie (max `timesteps` krokow / `max_hours`),
     potem egzamin na ostatnich `test_months` miesiacach, ktorych model nigdy nie widzial."""
     from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback
-    from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 
     configure_torch(profile)
     os.makedirs(out_dir, exist_ok=True)
     cfg.save(out_dir)
     train_df, val_df, test_df = split_periods(df, test_months, val_months)
     n_envs = n_envs or profile.n_envs
-    eval_every = eval_every or max(n_envs, min(1_000_000, timesteps // 10))
+    envs_per_worker = envs_per_worker or (profile.envs_per_worker if n_envs > 1 else 1)
+    eval_every = eval_every or max(n_envs * envs_per_worker, min(1_000_000, timesteps // 10))
 
     def span(x):
         return '{} dni ({} .. {})'.format(x['datetime'].dt.date.nunique(), x['datetime'].iloc[0].date(),
                                          x['datetime'].iloc[-1].date())
     log.info('Trening %s: %s | walidacja %s | EGZAMIN %s', cfg.algo, span(train_df), span(val_df), span(test_df))
-    log.info('%d srodowisk rownolegle, urzadzenie %s, sprawdzenie co %s krokow, stop po %d sprawdzeniach bez '
-             'poprawy, max %s krokow%s', n_envs, profile.device, '{:,}'.format(eval_every), patience,
+    log.info('%d procesow x %d srodowisk = %d rownolegle, urzadzenie %s, sprawdzenie co %s krokow, stop po %d '
+             'sprawdzeniach bez poprawy, max %s krokow%s', n_envs, envs_per_worker, n_envs * envs_per_worker,
+             profile.device, '{:,}'.format(eval_every), patience,
              '{:,}'.format(timesteps), ', max {} h'.format(max_hours) if max_hours else '')
-    fns = [partial(_make_env, train_df, cfg, seed + i) for i in range(n_envs)]
-    vec = VecMonitor(SubprocVecEnv(fns) if n_envs > 1 else DummyVecEnv(fns))
+    vec = make_vec_env(train_df, cfg, n_envs, envs_per_worker, seed)
     stopper = LearnUntilNoProgress(val_df, cfg, out_dir, eval_every, patience, max_hours)
     t0 = time.time()
     try:
         model = build_model(cfg, vec, profile, timesteps, seed=seed)
-        ckpt = CheckpointCallback(save_freq=max(1, checkpoint_every // n_envs),
+        ckpt = CheckpointCallback(save_freq=max(1, checkpoint_every // vec.num_envs),
                                   save_path=os.path.join(out_dir, 'checkpoints'), name_prefix='model')
         try:
             model.learn(total_timesteps=timesteps, callback=CallbackList([ckpt, stopper.callback]),
@@ -186,7 +201,8 @@ def load_model(model_dir, device='auto'):
     return _algo_cls(cfg.algo).load(os.path.join(model_dir, 'model.zip'), device=device), cfg
 
 
-def retrain(model_dir, df, profile, timesteps, holdout_days=10, n_envs=None, seed=0, min_gain_bps=0.0):
+def retrain(model_dir, df, profile, timesteps, holdout_days=10, n_envs=None, seed=0, min_gain_bps=0.0,
+            envs_per_worker=None):
     """Douczanie typu champion/challenger (walk-forward).
 
     1. Ostatnie `holdout_days` dni odkladamy jako sprawdzian - model ich nie widzi.
@@ -197,7 +213,6 @@ def retrain(model_dir, df, profile, timesteps, holdout_days=10, n_envs=None, see
     """
     import shutil
     import time as _time
-    from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 
     configure_torch(profile)
     champion, cfg = load_model(model_dir, device=profile.device)
@@ -206,8 +221,7 @@ def retrain(model_dir, df, profile, timesteps, holdout_days=10, n_envs=None, see
         raise ValueError('Za malo dni ({}) do douczania z {} dniami sprawdzianu'.format(len(days), holdout_days))
     train_df, test_df = split_days(df, holdout_days / len(days))
     n_envs = n_envs or profile.n_envs
-    fns = [partial(_make_env, train_df, cfg, seed + i) for i in range(n_envs)]
-    vec = VecMonitor(SubprocVecEnv(fns) if n_envs > 1 else DummyVecEnv(fns))
+    vec = make_vec_env(train_df, cfg, n_envs, envs_per_worker or profile.envs_per_worker, seed)
     try:
         challenger = _algo_cls(cfg.algo).load(os.path.join(model_dir, 'model.zip'), env=vec, device=profile.device)
         challenger.learn(total_timesteps=timesteps, reset_num_timesteps=False, progress_bar=False)

@@ -121,7 +121,8 @@ def cmd_train(args):
                        eval_every=args.eval_every or (max(200_000, pre['eval_every'] * pre.get('step_len', 1)
                                                           // cfg.step_len) if 'eval_every' in pre else None),
                        patience=args.patience or pre.get('patience', 10),
-                       max_hours=args.max_hours or pre.get('max_hours'))
+                       max_hours=args.max_hours or pre.get('max_hours'),
+                       envs_per_worker=args.envs_per_worker)
     print(json.dumps(results, indent=2))
 
 
@@ -356,7 +357,8 @@ def main(argv=None):
             sp.add_argument('--step-len', type=int, help='domyslnie 16 (xauusd: 1)')
         sp.add_argument('--max-position', type=int, help='domyslnie 3')
         sp.add_argument('--fee', type=float, help='koszt zamkniecia 1 jednostki w cenie (domyslnie mediana spreadu)')
-        sp.add_argument('--n-envs', type=int, help='domyslnie liczba watkow CPU - 2')
+        sp.add_argument('--n-envs', type=int, help='liczba procesow (domyslnie watki CPU - 2)')
+        sp.add_argument('--envs-per-worker', type=int, help='srodowisk w kazdym procesie (domyslnie 16 z GPU, 8 bez)')
         sp.add_argument('--device', choices=['cuda', 'cpu'], help='domyslnie cuda jesli dostepna')
         sp.add_argument('--seed', type=int, default=0)
 

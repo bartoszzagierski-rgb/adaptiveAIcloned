@@ -25,11 +25,13 @@ class TradingGymEnv(gym.Env):
     """
     metadata = {'render_modes': []}
 
-    def __init__(self, df, cfg, env_id='training_v1'):
+    def __init__(self, df, cfg, env_id='training_v1', with_transactions=True, clean=False):
         super().__init__()
         self.cfg = cfg
+        self.with_transactions = with_transactions  # trening: bez tabeli transakcji (mniej danych miedzy procesami)
         self.n_feat = len(cfg.features)
-        df = drop_short_days(df, cfg.obs_len + 2 * cfg.step_len + 1)
+        if not clean:  # clean=True: dane juz przefiltrowane (wspolne dla wielu srodowisk w procesie - bez kopii)
+            df = drop_short_days(df, cfg.obs_len + 2 * cfg.step_len + 1)
         self.env = trading_env.make(env_id=env_id, obs_data_len=cfg.obs_len, step_len=cfg.step_len, df=df,
                                     fee=cfg.fee, max_position=cfg.max_position, deal_col_name='price',
                                     feature_names=cfg.features, return_transaction=True)
@@ -71,7 +73,8 @@ class TradingGymEnv(gym.Env):
         price = float(self.raw[-1, self.n_feat + _PRICE])
         reward = (float(realized) + fluc - self._prev_fluc) / price * 1e4
         self._prev_fluc = fluc
-        return self._obs(), reward, bool(done), False, ({'transactions': info} if done else {})
+        return self._obs(), reward, bool(done), False, ({'transactions': info} if done and self.with_transactions
+                                                          else {})
 
 
 # ---- polityki ----------------------------------------------------------------------------
@@ -85,6 +88,9 @@ class RandomPolicy:
     def act(self, obs, window, position, unrealized):
         return int(self.rng.integers(3))
 
+    def act_batch(self, obs):
+        return self.rng.integers(3, size=len(obs))
+
 
 class RLPolicy:
     name = 'rl'
@@ -96,8 +102,41 @@ class RLPolicy:
         action, _ = self.model.predict(obs, deterministic=True)
         return int(action)
 
+    def act_batch(self, obs):
+        actions, _ = self.model.predict(obs, deterministic=True)
+        return actions
+
 
 def run_backtest(df, cfg, policy):
+    """Backtest dzien po dniu. Zwraca (podsumowanie, transakcje).
+
+    Polityki z act_batch (RL, losowa): wszystkie dni liczone naraz - siec dostaje paczke obserwacji
+    ze wszystkich dni w jednym wywolaniu (wielokrotnie szybciej). Pozostale (LLM): po kolei."""
+    if not hasattr(policy, 'act_batch'):
+        return run_backtest_sequential(df, cfg, policy)
+    min_len = cfg.obs_len + 2 * cfg.step_len + 1
+    envs = [TradingGymEnv(part, cfg, env_id='backtest_v1')
+            for _, part in df.groupby(df['datetime'].dt.date, sort=True) if len(part) >= min_len]
+    if not envs:
+        raise ValueError('Zaden dzien nie ma >= {} rekordow'.format(min_len))
+    obs = [e.reset()[0] for e in envs]
+    days = [None] * len(envs)
+    active = list(range(len(envs)))
+    while active:
+        actions = policy.act_batch(np.stack([obs[i] for i in active]))
+        still = []
+        for i, a in zip(active, actions):
+            obs[i], _, done, _, info = envs[i].step(int(a))
+            if done:
+                days[i] = info['transactions']
+            else:
+                still.append(i)
+        active = still
+    tr = pd.concat(days)
+    return summarize(tr, cfg, policy.name), tr
+
+
+def run_backtest_sequential(df, cfg, policy):
     """Przechodzi po kolei przez wszystkie dni (backtest_v1). Zwraca (podsumowanie, transakcje)."""
     env = TradingGymEnv(df, cfg, env_id='backtest_v1')
     days = []

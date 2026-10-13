@@ -37,6 +37,11 @@ class HardwareProfile:
         return max(1, min(32, self.cpu_threads - 2))
 
     @property
+    def envs_per_worker(self):
+        """Ile kopii rynku liczy jeden proces naraz (paczka dla sieci = n_envs x envs_per_worker)."""
+        return 16 if self.cuda else 8
+
+    @property
     def device(self):
         return 'cuda' if self.cuda else 'cpu'
 
@@ -66,7 +71,7 @@ class HardwareProfile:
 
     def describe(self):
         d = asdict(self)
-        d.update(n_envs=self.n_envs, device=self.device, net_arch=self.net_arch, batch_size=self.batch_size,
+        d.update(n_envs=self.n_envs, envs_per_worker=self.envs_per_worker, device=self.device, net_arch=self.net_arch, batch_size=self.batch_size,
                  llm_model=self.llm_model)
         return d
 

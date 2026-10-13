@@ -30,7 +30,7 @@ Polecenie `python -m tradebot hw` pokazuje wykryty sprzęt i dobrane ustawienia:
 
 | Zasób | Jak jest używany |
 |---|---|
-| CPU | `n_envs` = liczba wątków − 2. Każda kopia środowiska działa w osobnym procesie (SubprocVecEnv). Dwa wątki zostają dla systemu i MT5. |
+| CPU | `n_envs` = liczba wątków − 2 procesów, każdy liczy naraz 16 kopii rynku (`--envs-per-worker`), czyli na T7 18 × 16 = 288 symulacji równolegle. Jedna wymiana danych na paczkę zamiast na każdy krok, więc procesor liczy, zamiast czekać. Sprawdziany na walidacji liczą wszystkie dni naraz. |
 | GPU | Sieć PPO/DQN liczy się na CUDA: większa sieć `[512, 512, 256]` i batch 4096. Ollama trzyma cały model LLM w VRAM (`num_gpu=999`). |
 | RAM | Dane są trzymane w pamięci. Replay buffer DQN zajmuje do ok. 25% RAM, czyli przy 64 GB miliony przejść. |
 | SSD | Dane w formacie `.h5` oraz checkpoint modelu co 200 tys. kroków w `models/<nazwa>/checkpoints/`. |

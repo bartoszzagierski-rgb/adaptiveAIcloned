@@ -372,3 +372,35 @@ def test_cli_sweep_picks_by_validation(tmp_path, monkeypatch):
     assert summ['best']['val_sharpe'] == max(v['val_sharpe'] for v in summ['variants'])
     assert os.path.exists('sw/best/model.zip')
     mt5_data.use_module(None)
+
+
+def test_batched_backtest_equals_sequential(tick_df):
+    from tradebot.gym_env import run_backtest_sequential
+
+    class Pattern:  # deterministyczna polityka zalezna od obserwacji
+        name = 'p'
+
+        def act(self, obs, window, position, unrealized):
+            return int(abs(obs[0] * 1000)) % 3
+
+        def act_batch(self, obs):
+            return [self.act(o, None, 0, 0) for o in obs]
+    c = cfg()
+    fast, tr_fast = run_backtest(tick_df, c, Pattern())
+    slow, tr_slow = run_backtest_sequential(tick_df, c, Pattern())
+    assert fast == slow and len(tr_fast) == len(tr_slow)
+
+
+def test_batched_subproc_vec_env(tick_df):
+    from tradebot.train import make_vec_env
+    vec = make_vec_env(tick_df, cfg(), n_workers=2, envs_per_worker=3)
+    try:
+        assert vec.num_envs == 6
+        obs = vec.reset()
+        assert obs.shape[0] == 6
+        for _ in range(300):
+            obs, rew, done, infos = vec.step(np.random.randint(3, size=6))
+        assert obs.shape[0] == 6 and rew.shape == (6,) and len(infos) == 6
+        assert len(vec.get_attr('cfg')) == 6
+    finally:
+        vec.close()
